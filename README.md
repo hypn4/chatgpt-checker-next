@@ -1,3 +1,34 @@
+> 한국어 현지화 fork입니다. 원본 프로젝트: [zetaloop/chatgpt-checker-next](https://github.com/zetaloop/chatgpt-checker-next)
+
+# ChatGPT Checker Next — 한국어판
+
+ChatGPT와 Codex의 계정, 사용량, 서비스 상태를 확인하고 편의 기능을 추가하는 Tampermonkey userscript의 한국어판입니다.
+
+**[한국어판 설치](https://github.com/hypn4/chatgpt-checker-next/raw/refs/heads/main/dist/chatgpt-checker-next.ko.user.js)** · [한국어 문서](README.ko.md) · [Upstream](https://github.com/zetaloop/chatgpt-checker-next)
+
+## 한국어판 설치
+
+1. [Tampermonkey](https://www.tampermonkey.net)를 설치합니다.
+2. **[chatgpt-checker-next.ko.user.js 설치](https://github.com/hypn4/chatgpt-checker-next/raw/refs/heads/main/dist/chatgpt-checker-next.ko.user.js)** 를 엽니다.
+3. Tampermonkey 설치 화면에서 확인한 뒤 ChatGPT 또는 Codex를 엽니다.
+4. 페이지 오른쪽의 원형 표시 위에 마우스를 올리면 모델, 사용량, 서비스 상태 등을 확인할 수 있습니다.
+
+한국어판은 `dist/chatgpt-checker-next.ko.user.js`에서 배포되며 Tampermonkey의 자동 업데이트도 이 fork에서 받습니다.
+
+## 이 fork에 대해
+
+- upstream 코드는 가능한 그대로 유지합니다.
+- 한국어 번역은 `locales/ko-KR.json`에서 별도로 관리합니다.
+- GitHub Actions는 upstream의 새 커밋을 감지하고 **이 fork 내부에만** 동기화 PR을 만듭니다.
+- 번역에는 GitHub Actions의 AI를 사용하지 않습니다. 필요한 번역은 로컬 AI 코딩 에이전트로 수행합니다.
+- `upstream` remote는 fetch 전용이며 upstream 저장소로 push하거나 PR을 보내지 않습니다.
+
+자세한 구조와 번역/동기화 방법은 [README.ko.md](README.ko.md)를 참고하세요.
+
+---
+
+## Upstream README
+
 > Forked from [KoriIku/chatgpt-degrade-checker](https://github.com/KoriIku/chatgpt-degrade-checker).
 
 # ChatGPT Checker Next

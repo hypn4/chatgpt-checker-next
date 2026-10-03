@@ -4,8 +4,8 @@ This fork follows `zetaloop/chatgpt-checker-next` as a read-only upstream and pu
 
 ## Repository ownership boundaries
 
-- `chatgpt-checker-next.user.js` and other files that already exist upstream are upstream-owned. Do not edit them for localization.
-- `locales/`, `.localization/`, `dist/`, `.github/workflows/`, `AGENTS.md`, and `README.ko.md` are fork-owned localization assets.
+- `chatgpt-checker-next.user.js` and other upstream application files are upstream-owned. Do not edit them for localization.
+- `README.md`, `README.ko.md`, `locales/`, `.localization/`, `dist/`, `.github/workflows/`, and `AGENTS.md` are fork-owned localization assets.
 - Never push to the `upstream` remote and never open a pull request against `zetaloop/chatgpt-checker-next`.
 - All pushes and pull requests must target `hypn4/chatgpt-checker-next` only.
 
