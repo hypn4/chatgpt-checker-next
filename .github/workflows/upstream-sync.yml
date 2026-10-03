@@ -56,7 +56,28 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git merge --no-edit upstream/main
+          cp README.md "$RUNNER_TEMP/README.md"
+          set +e
+          git merge --no-commit --no-ff upstream/main
+          merge_status=$?
+          set -e
+
+          conflicts="$(git diff --name-only --diff-filter=U | grep -v '^README.md$' || true)"
+          if [ -n "$conflicts" ]; then
+            echo "Unresolved upstream conflicts outside fork-owned README.md:"
+            echo "$conflicts"
+            git merge --abort
+            exit 1
+          fi
+
+          cp "$RUNNER_TEMP/README.md" README.md
+          git add README.md
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git commit --no-edit
+          elif [ "$merge_status" -ne 0 ]; then
+            exit "$merge_status"
+          fi
+
           bun run --cwd .localization sync
           bun run --cwd .localization build
           git add locales dist
