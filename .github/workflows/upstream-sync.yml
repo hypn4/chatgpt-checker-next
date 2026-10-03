@@ -1,0 +1,100 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install localization dependencies
+        working-directory: .localization
+        run: bun install --frozen-lockfile
+
+      - name: Fetch upstream
+        id: upstream
+        shell: bash
+        run: |
+          git remote add upstream https://github.com/zetaloop/chatgpt-checker-next.git
+          git remote set-url --push upstream DISABLED
+          git fetch --no-tags upstream main
+          sha="$(git rev-parse upstream/main)"
+          short_sha="$(git rev-parse --short=12 upstream/main)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short_sha" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "needs_sync=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_sync=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare sync branch
+        if: steps.upstream.outputs.needs_sync == 'true'
+        env:
+          UPSTREAM_SHA: ${{ steps.upstream.outputs.sha }}
+        shell: bash
+        run: |
+          branch="sync/upstream-${{ steps.upstream.outputs.short_sha }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git merge --no-edit upstream/main
+          bun run --cwd .localization sync
+          bun run --cwd .localization build
+          git add locales dist
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(i18n): refresh localization catalog"
+          fi
+          git push --force-with-lease --set-upstream origin "$branch"
+          echo "SYNC_BRANCH=$branch" >> "$GITHUB_ENV"
+
+      - name: Open pull request in this fork
+        if: steps.upstream.outputs.needs_sync == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          existing="$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$SYNC_BRANCH" \
+            --state open \
+            --json url \
+            --jq '.[0].url')"
+          if [ -n "$existing" ]; then
+            echo "Existing PR: $existing"
+            exit 0
+          fi
+
+          cat > "$RUNNER_TEMP/upstream-pr-body.md" <<'EOF'
+          Syncs the latest commits from `zetaloop/chatgpt-checker-next:main` into this fork only.
+
+          The workflow does not translate with AI and never writes to the upstream repository.
+
+          If Localization CI reports missing translations, check out this PR branch locally, translate only the `null` entries in `locales/ko-KR.json`, bump the localization revision, rebuild, verify, and push back to this branch.
+          EOF
+
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$SYNC_BRANCH" \
+            --title "chore(upstream): sync ${{ steps.upstream.outputs.short_sha }}" \
+            --body-file "$RUNNER_TEMP/upstream-pr-body.md"

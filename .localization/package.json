@@ -1,0 +1,16 @@
+{
+  "name": "chatgpt-checker-next-localization",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "sync": "bun scripts/sync.mjs",
+    "bump": "bun scripts/bump.mjs",
+    "build": "bun scripts/build.mjs",
+    "check": "bun scripts/check.mjs",
+    "verify": "bun test && bun scripts/check.mjs && bun scripts/build.mjs --check"
+  },
+  "dependencies": {
+    "acorn": "^8.15.0"
+  }
+}

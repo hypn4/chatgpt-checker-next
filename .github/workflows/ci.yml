@@ -1,0 +1,27 @@
+name: Localization CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install localization dependencies
+        working-directory: .localization
+        run: bun install --frozen-lockfile
+
+      - name: Verify localization
+        run: bun run --cwd .localization verify
