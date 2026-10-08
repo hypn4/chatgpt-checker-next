@@ -2316,22 +2316,28 @@
         return sections.join("\n\n========\n\n");
     }
 
-    function setChatgptCopyButtonState(button, state, sprite) {
+    function setChatgptCopyButtonState(
+        button,
+        state,
+        sprite,
+        idleLabel = "复制全文",
+    ) {
         const name =
             state === "success"
-                ? "checkmark-lg-light-16"
+                ? "checkmark-lg-light"
                 : state === "error"
-                  ? "circle-exclamation-mark-light-16"
-                  : "square-on-square-light-16";
-        const targets = button.lastElementChild?.querySelectorAll("svg") ?? [];
+                  ? "circle-exclamation-mark-light"
+                  : "square-on-square-light";
+        const targets = button.querySelectorAll("svg");
         for (const target of targets) {
+            const size = target.viewBox.baseVal.width === 20 ? 20 : 16;
             const use = document.createElementNS(
                 "http://www.w3.org/2000/svg",
                 "use",
             );
-            use.setAttribute("href", `${sprite}#${name}`);
+            use.setAttribute("href", `${sprite}#${name}-${size}`);
             use.setAttribute("fill", "currentColor");
-            target.setAttribute("viewBox", "0 0 16 16");
+            target.setAttribute("viewBox", `0 0 ${size} ${size}`);
             target.replaceChildren(use);
         }
         const label =
@@ -2341,9 +2347,37 @@
                   ? "已复制"
                   : state === "error"
                     ? "复制失败"
-                    : "复制全文";
+                    : idleLabel;
         button.setAttribute("aria-label", label);
         button.title = label;
+    }
+
+    function bindChatgptCopyButton(
+        button,
+        getText,
+        sprite,
+        label = "复制全文",
+    ) {
+        setChatgptCopyButtonState(button, "idle", sprite, label);
+        let copying = false;
+        button.addEventListener("click", async () => {
+            if (copying) return;
+            copying = true;
+            setChatgptCopyButtonState(button, "loading", sprite, label);
+            try {
+                await pageWindow.navigator.clipboard.writeText(await getText());
+                setChatgptCopyButtonState(button, "success", sprite, label);
+            } catch (error) {
+                console.error("[CheckerNext] 复制失败:", error);
+                setChatgptCopyButtonState(button, "error", sprite, label);
+            } finally {
+                copying = false;
+            }
+            setTimeout(
+                () => setChatgptCopyButtonState(button, "idle", sprite, label),
+                1000,
+            );
+        });
     }
 
     function syncChatgptCopyButton() {
@@ -2408,13 +2442,9 @@
         button.type = "button";
         button.dataset.pathname = pathname;
         button.disabled = !ready;
-        setChatgptCopyButtonState(button, "idle", sprite);
-        let copying = false;
-        button.addEventListener("click", async () => {
-            if (copying) return;
-            copying = true;
-            setChatgptCopyButtonState(button, "loading", sprite);
-            try {
+        bindChatgptCopyButton(
+            button,
+            async () => {
                 const currentTurns =
                     await pageWindow.__checkerNextRuntimeModelBridge.loadTurns(
                         chatgptCopyDetailsEnabled,
@@ -2422,21 +2452,10 @@
                 if (!Array.isArray(currentTurns)) {
                     throw new Error("当前会话尚未载入");
                 }
-                await pageWindow.navigator.clipboard.writeText(
-                    formatChatgptConversation(currentTurns),
-                );
-                setChatgptCopyButtonState(button, "success", sprite);
-            } catch (error) {
-                console.error("[CheckerNext] 复制会话失败:", error);
-                setChatgptCopyButtonState(button, "error", sprite);
-            } finally {
-                copying = false;
-            }
-            setTimeout(
-                () => setChatgptCopyButtonState(button, "idle", sprite),
-                1000,
-            );
-        });
+                return formatChatgptConversation(currentTurns);
+            },
+            sprite,
+        );
         nativeButton.before(button);
     }
 
