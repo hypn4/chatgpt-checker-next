@@ -3833,8 +3833,13 @@
                 : typeof credits.balance === "number"
                   ? String(credits.balance)
                   : "");
-        if (Number(balanceRaw) > 0) {
-            valueEl.innerText = balanceRaw;
+        const balance = Number(balanceRaw);
+        if (Number.isFinite(balance) && balance > 0) {
+            valueEl.innerText = Math.ceil(balance).toLocaleString(
+                chatgptRuntimeEnvironmentState?.locale ||
+                    document.documentElement.lang ||
+                    undefined,
+            );
             container.style.display = "block";
             codexCreditsVisible = true;
         } else {
