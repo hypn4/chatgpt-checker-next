@@ -4,7 +4,7 @@
 // @homepage     https://github.com/zetaloop/chatgpt-checker-next
 // @author       zetaloop
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.1.3
+// @version      5.2.0
 // @description  查看 ChatGPT 和 Codex 的账号、用量与服务信息。
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -72,7 +72,6 @@
     let chatgptRuntimeModelState;
     let chatgptRuntimeEnvironmentState;
     let chatgptPlanTypes;
-    let chatgptCopyIcons;
     let chatgptModuleInjectionStarted = false;
     let chatgptInjectionFailure;
     const chatgptReportedFailures = new Set();
@@ -187,6 +186,7 @@
     function installChatgptRuntimeBridge(require, bindings) {
         const { location } = pageWindow;
         const conversations = new Map();
+        const dotControllers = new Map();
         const origins = new Map();
         const customModels = new Map();
         const controls = new Set();
@@ -244,11 +244,7 @@
         const current = () => conversations.get(routeId());
         const watchThread = (scope, conversationId) =>
             scope.watch((scope) => {
-                const connection = scope.get(
-                    native.threadConnection,
-                    conversationId,
-                );
-                const manager = connection?.manager;
+                const manager = native.threadManager?.(scope, conversationId);
                 if (!manager) {
                     scheduleState();
                     return;
@@ -586,6 +582,22 @@
                     ]);
                     return native.createElement(fn, props);
                 };
+            },
+            dotController(fn) {
+                return after(fn, (_, controller) => {
+                    dotControllers.set(controller.roomId, controller);
+                });
+            },
+            dotConversation(roomId) {
+                const controller = dotControllers.get(roomId);
+                return (
+                    controller && {
+                        messages:
+                            controller.services.conversations.get(roomId)
+                                .messages,
+                        room: controller.state.getSnapshot().room,
+                    }
+                );
             },
             turns(fn) {
                 return after(fn, ([props]) => {
@@ -1356,6 +1368,25 @@
         );
 
         module(
+            "Dots 消息状态模块",
+            (source) =>
+                source.includes(
+                    "historyAnchor:void 0,newerLoading:!1,messages:[]",
+                ) && source.includes("services:{renderMessageFooter:"),
+            (messages) => {
+                const create = single(
+                    [
+                        ...messages.source.matchAll(
+                            /historyAnchor:void 0,newerLoading:!1,messages:\[\][\s\S]*?function ([\w$]+)\(/g,
+                        ),
+                    ],
+                    "Dots 消息控制器",
+                )[1];
+                append(messages, `${create}=${api}.dotController(${create});`);
+            },
+        );
+
+        module(
             "会话工具栏模块",
             (source) =>
                 source.includes('actionId:"chatgpt-conversation-actions"'),
@@ -1537,20 +1568,20 @@
             );
         }
 
-        const threadConnection =
-            /([\w$]+)=\(0,[\w$]+\.[\w$]+\)\([^;]+;if\([^;]+return\{hostId:[\w$]+,manager:[\w$]+,status:"ready"\}/;
+        const threadManager =
+            /function ([\w$]+)\(e,t\)\{if\(null==t\)return null;[^{}]*\.getConversation\(t\)\)\?\?null\}/;
         module(
-            "任务连接模块",
-            (source) => threadConnection.test(source),
-            (connection) => {
-                const symbol = connection.source.match(threadConnection)[1];
+            "任务管理模块",
+            (source) => threadManager.test(source),
+            (manager) => {
+                const symbol = manager.source.match(threadManager)[1];
                 const [exportName] = single(
                     Object.entries(
-                        getChatgptModuleExports(connection.source),
+                        getChatgptModuleExports(manager.source),
                     ).filter(([, value]) => value === symbol),
-                    "任务连接接口",
+                    "任务管理接口",
                 );
-                bindings.threadConnection = [connection.id, exportName];
+                bindings.threadManager = [manager.id, exportName];
             },
         );
 
@@ -1940,7 +1971,7 @@
                 throw new Error(`${label}匹配到 ${items.length} 个结果`);
             return items[0];
         };
-        const data = [
+        return [
             {
                 label: "会员类型",
                 predicate: (source) =>
@@ -1960,38 +1991,6 @@
                 },
             },
         ];
-        const copyIcons = {};
-        for (const [state, name] of [
-            ["idle", "square-on-square-light-16"],
-            ["success", "checkmark-lg-light-16"],
-            ["error", "circle-exclamation-mark-light-16"],
-        ]) {
-            data.push({
-                label: `${state}图标`,
-                predicate: (source) => source.includes(`name:"${name}"`),
-                read(exports) {
-                    const icon = single(
-                        Object.values(exports).filter(
-                            (value) =>
-                                value?.name === name &&
-                                value.canvas &&
-                                typeof value.body === "string",
-                        ),
-                        `${state}图标`,
-                    );
-                    copyIcons[state] = { ...icon.canvas, body: icon.body };
-                    if (
-                        ["idle", "success", "error"].every(
-                            (state) => copyIcons[state],
-                        )
-                    ) {
-                        chatgptCopyIcons = copyIcons;
-                        syncChatgptCopyButton();
-                    }
-                },
-            });
-        }
-        return data;
     }
 
     function getChatgptModuleItems() {
@@ -2349,18 +2348,54 @@
         return sections.join("\n\n========\n\n");
     }
 
-    function setChatgptCopyButtonState(button, state, icons) {
-        const icon =
+    function getDotConversation(roomId) {
+        const conversation =
+            pageWindow.__checkerNextRuntimeModelBridge?.dotConversation(roomId);
+        if (!conversation) throw new Error("Dots 消息状态尚未载入");
+        return conversation;
+    }
+
+    function formatDotConversation(roomId) {
+        const { messages, room } = getDotConversation(roomId);
+        const sections = messages
+            .filter((message) => !message.deletedAt && message.text)
+            .map((message) => {
+                const sender = message.self
+                    ? "用户"
+                    : (room?.members.find(
+                          (member) => member.id === message.senderId,
+                      )?.name ??
+                      message.senderName ??
+                      "助手");
+                return `「${sender}」\n${message.text}`;
+            });
+        if (!sections.length) throw new Error("会话中没有可复制的正文");
+        return sections.join("\n\n========\n\n");
+    }
+
+    function setChatgptCopyButtonState(
+        button,
+        state,
+        sprite,
+        idleLabel = "复制全文",
+    ) {
+        const name =
             state === "success"
-                ? icons.success
+                ? "checkmark-lg-light"
                 : state === "error"
-                  ? icons.error
-                  : icons.idle;
-        const targets = button.lastElementChild?.querySelectorAll("svg") ?? [];
+                  ? "circle-exclamation-mark-light"
+                  : "square-on-square-light";
+        const targets = button.querySelectorAll("svg");
         for (const target of targets) {
-            target.setAttribute("viewBox", icon.viewBox);
-            target.setAttribute("fill", "currentColor");
-            target.innerHTML = icon.body;
+            const size = target.viewBox.baseVal.width === 20 ? 20 : 16;
+            const use = document.createElementNS(
+                "http://www.w3.org/2000/svg",
+                "use",
+            );
+            use.setAttribute("href", `${sprite}#${name}-${size}`);
+            use.setAttribute("fill", "currentColor");
+            target.setAttribute("viewBox", `0 0 ${size} ${size}`);
+            target.replaceChildren(use);
         }
         const label =
             state === "loading"
@@ -2369,16 +2404,144 @@
                   ? "已复制"
                   : state === "error"
                     ? "复制失败"
-                    : "复制全文";
+                    : idleLabel;
         button.setAttribute("aria-label", label);
         button.title = label;
     }
 
-    function syncChatgptCopyButton() {
+    function bindChatgptCopyButton(
+        button,
+        getText,
+        sprite,
+        label = "复制全文",
+    ) {
+        setChatgptCopyButtonState(button, "idle", sprite, label);
+        let copying = false;
+        button.addEventListener("click", async (event) => {
+            event.stopPropagation();
+            if (copying) return;
+            copying = true;
+            setChatgptCopyButtonState(button, "loading", sprite, label);
+            try {
+                await pageWindow.navigator.clipboard.writeText(await getText());
+                setChatgptCopyButtonState(button, "success", sprite, label);
+            } catch (error) {
+                console.error("[CheckerNext] 复制失败:", error);
+                setChatgptCopyButtonState(button, "error", sprite, label);
+            } finally {
+                copying = false;
+            }
+            setTimeout(
+                () => setChatgptCopyButtonState(button, "idle", sprite, label),
+                1000,
+            );
+        });
+    }
+
+    function syncDotCopyButtons() {
         const existing = document.getElementById(
             "checker-next-copy-conversation-button",
         );
+        if (!chatgptCopyButtonEnabled || !chatgptModuleInjectionStarted) {
+            existing?.remove();
+            for (const button of document.querySelectorAll(
+                ".checker-next-dot-copy-message",
+            ))
+                button.remove();
+            return;
+        }
+
+        const articles = document.querySelectorAll(
+            "article.message-row[data-message-id]",
+        );
+        for (const article of articles) {
+            const reply = article.querySelector(
+                '.message-inline-actions button[data-action="reply"]',
+            );
+            if (
+                !reply ||
+                article.querySelector(".checker-next-dot-copy-message")
+            )
+                continue;
+            const sprite = reply
+                .querySelector("svg use")
+                ?.getAttribute("href")
+                ?.split("#")[0];
+            if (!sprite) continue;
+            const button = reply.cloneNode(true);
+            button.removeAttribute("data-action");
+            button.disabled = false;
+            button.classList.add("checker-next-dot-copy-message");
+            bindChatgptCopyButton(
+                button,
+                () => {
+                    const roomId = article.dataset.messageId.split("~")[0];
+                    const text = getDotConversation(roomId).messages.find(
+                        (message) => message.id === article.dataset.messageId,
+                    )?.text;
+                    if (!text) throw new Error("消息中没有可复制的正文");
+                    return text;
+                },
+                sprite,
+                "复制消息",
+            );
+            if (article.classList.contains("self")) reply.before(button);
+            else reply.after(button);
+        }
+
         const pathname = pageWindow.location.pathname;
+        const roomId = articles[0]?.dataset.messageId?.split("~")[0];
+        if (
+            existing?.dataset.pathname === pathname &&
+            existing.dataset.roomId === roomId
+        )
+            return;
+        existing?.remove();
+        if (!roomId) return;
+        const more = [
+            ...document.querySelectorAll(
+                'header[data-app-shell-titlebar] [data-app-shell-main-titlebar] button[aria-haspopup="menu"]',
+            ),
+        ].find((button) =>
+            button.querySelector('use[href$="#ellipsis-horizontal-light-16"]'),
+        );
+        const sprite = more
+            ?.querySelector("svg use")
+            ?.getAttribute("href")
+            ?.split("#")[0];
+        if (!more || !sprite) return;
+        const button = more.cloneNode(true);
+        for (const name of [
+            "id",
+            "aria-haspopup",
+            "aria-expanded",
+            "data-state",
+        ])
+            button.removeAttribute(name);
+        button.id = "checker-next-copy-conversation-button";
+        button.dataset.pathname = pathname;
+        button.dataset.roomId = roomId;
+        bindChatgptCopyButton(
+            button,
+            () => formatDotConversation(roomId),
+            sprite,
+        );
+        more.after(button);
+    }
+
+    function syncChatgptCopyButton() {
+        const pathname = pageWindow.location.pathname;
+        if (/^\/dots\/[^/]+\/?$/.test(pathname)) {
+            syncDotCopyButtons();
+            return;
+        }
+        let existing = document.getElementById(
+            "checker-next-copy-conversation-button",
+        );
+        if (existing && existing.dataset.pathname !== pathname) {
+            existing.remove();
+            existing = null;
+        }
         const isConversationPath =
             /^\/(?:c|share|g\/[^/]+\/(?:shared\/)?c)\/[^/]+$/.test(pathname);
         if (!chatgptCopyButtonEnabled || !isConversationPath) {
@@ -2416,7 +2579,11 @@
                 'header[data-app-shell-titlebar] button[aria-haspopup="menu"]',
             ),
         ].findLast((button) => !button.closest('[aria-hidden="true"]'));
-        if (!nativeButton || !chatgptCopyIcons) return;
+        const sprite = document
+            .querySelector('svg use[href*="/cdn/assets/icons-"]')
+            ?.getAttribute("href")
+            ?.split("#")[0];
+        if (!nativeButton || !sprite) return;
 
         const button = nativeButton.cloneNode(true);
         const nativeIcons = [
@@ -2428,19 +2595,13 @@
         ) {
             return;
         }
-        const icons = chatgptCopyIcons;
-
         button.id = "checker-next-copy-conversation-button";
         button.type = "button";
         button.dataset.pathname = pathname;
         button.disabled = !ready;
-        setChatgptCopyButtonState(button, "idle", icons);
-        let copying = false;
-        button.addEventListener("click", async () => {
-            if (copying) return;
-            copying = true;
-            setChatgptCopyButtonState(button, "loading", icons);
-            try {
+        bindChatgptCopyButton(
+            button,
+            async () => {
                 const currentTurns =
                     await pageWindow.__checkerNextRuntimeModelBridge.loadTurns(
                         chatgptCopyDetailsEnabled,
@@ -2448,21 +2609,10 @@
                 if (!Array.isArray(currentTurns)) {
                     throw new Error("当前会话尚未载入");
                 }
-                await pageWindow.navigator.clipboard.writeText(
-                    formatChatgptConversation(currentTurns),
-                );
-                setChatgptCopyButtonState(button, "success", icons);
-            } catch (error) {
-                console.error("[CheckerNext] 复制会话失败:", error);
-                setChatgptCopyButtonState(button, "error", icons);
-            } finally {
-                copying = false;
-            }
-            setTimeout(
-                () => setChatgptCopyButtonState(button, "idle", icons),
-                1000,
-            );
-        });
+                return formatChatgptConversation(currentTurns);
+            },
+            sprite,
+        );
         nativeButton.before(button);
     }
 
@@ -3859,8 +4009,13 @@
                 : typeof credits.balance === "number"
                   ? String(credits.balance)
                   : "");
-        if (Number(balanceRaw) > 0) {
-            valueEl.innerText = balanceRaw;
+        const balance = Number(balanceRaw);
+        if (Number.isFinite(balance) && balance > 0) {
+            valueEl.innerText = Math.ceil(balance).toLocaleString(
+                chatgptRuntimeEnvironmentState?.locale ||
+                    document.documentElement.lang ||
+                    undefined,
+            );
             container.style.display = "block";
             codexCreditsVisible = true;
         } else {
