@@ -72,7 +72,6 @@
     let chatgptRuntimeModelState;
     let chatgptRuntimeEnvironmentState;
     let chatgptPlanTypes;
-    let chatgptCopyIcons;
     let chatgptModuleInjectionStarted = false;
     let chatgptInjectionFailure;
     const chatgptReportedFailures = new Set();
@@ -1940,7 +1939,7 @@
                 throw new Error(`${label}匹配到 ${items.length} 个结果`);
             return items[0];
         };
-        const data = [
+        return [
             {
                 label: "会员类型",
                 predicate: (source) =>
@@ -1960,38 +1959,6 @@
                 },
             },
         ];
-        const copyIcons = {};
-        for (const [state, name] of [
-            ["idle", "square-on-square-light-16"],
-            ["success", "checkmark-lg-light-16"],
-            ["error", "circle-exclamation-mark-light-16"],
-        ]) {
-            data.push({
-                label: `${state}图标`,
-                predicate: (source) => source.includes(`name:"${name}"`),
-                read(exports) {
-                    const icon = single(
-                        Object.values(exports).filter(
-                            (value) =>
-                                value?.name === name &&
-                                value.canvas &&
-                                typeof value.body === "string",
-                        ),
-                        `${state}图标`,
-                    );
-                    copyIcons[state] = { ...icon.canvas, body: icon.body };
-                    if (
-                        ["idle", "success", "error"].every(
-                            (state) => copyIcons[state],
-                        )
-                    ) {
-                        chatgptCopyIcons = copyIcons;
-                        syncChatgptCopyButton();
-                    }
-                },
-            });
-        }
-        return data;
     }
 
     function getChatgptModuleItems() {
@@ -2349,18 +2316,23 @@
         return sections.join("\n\n========\n\n");
     }
 
-    function setChatgptCopyButtonState(button, state, icons) {
-        const icon =
+    function setChatgptCopyButtonState(button, state, sprite) {
+        const name =
             state === "success"
-                ? icons.success
+                ? "checkmark-lg-light-16"
                 : state === "error"
-                  ? icons.error
-                  : icons.idle;
+                  ? "circle-exclamation-mark-light-16"
+                  : "square-on-square-light-16";
         const targets = button.lastElementChild?.querySelectorAll("svg") ?? [];
         for (const target of targets) {
-            target.setAttribute("viewBox", icon.viewBox);
-            target.setAttribute("fill", "currentColor");
-            target.innerHTML = icon.body;
+            const use = document.createElementNS(
+                "http://www.w3.org/2000/svg",
+                "use",
+            );
+            use.setAttribute("href", `${sprite}#${name}`);
+            use.setAttribute("fill", "currentColor");
+            target.setAttribute("viewBox", "0 0 16 16");
+            target.replaceChildren(use);
         }
         const label =
             state === "loading"
@@ -2416,7 +2388,11 @@
                 'header[data-app-shell-titlebar] button[aria-haspopup="menu"]',
             ),
         ].findLast((button) => !button.closest('[aria-hidden="true"]'));
-        if (!nativeButton || !chatgptCopyIcons) return;
+        const sprite = document
+            .querySelector('svg use[href*="/cdn/assets/icons-"]')
+            ?.getAttribute("href")
+            ?.split("#")[0];
+        if (!nativeButton || !sprite) return;
 
         const button = nativeButton.cloneNode(true);
         const nativeIcons = [
@@ -2428,18 +2404,16 @@
         ) {
             return;
         }
-        const icons = chatgptCopyIcons;
-
         button.id = "checker-next-copy-conversation-button";
         button.type = "button";
         button.dataset.pathname = pathname;
         button.disabled = !ready;
-        setChatgptCopyButtonState(button, "idle", icons);
+        setChatgptCopyButtonState(button, "idle", sprite);
         let copying = false;
         button.addEventListener("click", async () => {
             if (copying) return;
             copying = true;
-            setChatgptCopyButtonState(button, "loading", icons);
+            setChatgptCopyButtonState(button, "loading", sprite);
             try {
                 const currentTurns =
                     await pageWindow.__checkerNextRuntimeModelBridge.loadTurns(
@@ -2451,15 +2425,15 @@
                 await pageWindow.navigator.clipboard.writeText(
                     formatChatgptConversation(currentTurns),
                 );
-                setChatgptCopyButtonState(button, "success", icons);
+                setChatgptCopyButtonState(button, "success", sprite);
             } catch (error) {
                 console.error("[CheckerNext] 复制会话失败:", error);
-                setChatgptCopyButtonState(button, "error", icons);
+                setChatgptCopyButtonState(button, "error", sprite);
             } finally {
                 copying = false;
             }
             setTimeout(
-                () => setChatgptCopyButtonState(button, "idle", icons),
+                () => setChatgptCopyButtonState(button, "idle", sprite),
                 1000,
             );
         });
