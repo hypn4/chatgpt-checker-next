@@ -185,5 +185,13 @@
   "[CheckerNext] 处理 Chat 模型响应出错:": "[CheckerNext] Chat 모델 응답 처리 중 오류:",
   "[CheckerNext] 处理功能用量响应出错:": "[CheckerNext] 기능 사용량 응답 처리 중 오류:",
   "[CheckerNext] 处理 Codex 响应出错:": "[CheckerNext] Codex 응답 처리 중 오류:",
-  "[CheckerNext] 处理 Codex 重置机会响应出错:": "[CheckerNext] Codex 초기화 기회 응답 처리 중 오류:"
+  "[CheckerNext] 处理 Codex 重置机会响应出错:": "[CheckerNext] Codex 초기화 기회 응답 처리 중 오류:",
+  "Dots 消息状态模块": "Dots 메시지 상태 모듈",
+  "Dots 消息控制器": "Dots 메시지 컨트롤러",
+  "任务管理模块": "작업 관리 모듈",
+  "任务管理接口": "작업 관리 인터페이스",
+  "Dots 消息状态尚未载入": "Dots 메시지 상태가 아직 로드되지 않음",
+  "[CheckerNext] 复制失败:": "[CheckerNext] 복사 실패:",
+  "消息中没有可复制的正文": "메시지에 복사할 본문이 없습니다.",
+  "复制消息": "메시지 복사"
 }
