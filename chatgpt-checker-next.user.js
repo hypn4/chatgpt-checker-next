@@ -36,6 +36,7 @@
     const CHATGPT_COPY_BUTTON_ENABLED_KEY =
         "checker-next-chatgpt-copy-button-enabled";
     const CHATGPT_COPY_DETAILS_KEY = "checker-next-chatgpt-copy-details";
+    const CHATGPT_COPY_RAW_KEY = "checker-next-chatgpt-copy-raw";
     const CHATGPT_MESSAGE_INFO_KEY = "checker-next-chatgpt-message-info";
     const CHATGPT_MESSAGE_INFO_EVENT = "checker-next-message-info";
     const CHATGPT_APPROVAL_KEY = "checker-next-chatgpt-approval";
@@ -58,6 +59,8 @@
     let chatgptCopyDetailsEnabled =
         isChatgptMode &&
         localStorage.getItem(CHATGPT_COPY_DETAILS_KEY) === "true";
+    let chatgptCopyRawEnabled =
+        isChatgptMode && localStorage.getItem(CHATGPT_COPY_RAW_KEY) === "true";
     let chatgptMessageInfoEnabled =
         isChatgptMode &&
         localStorage.getItem(CHATGPT_MESSAGE_INFO_KEY) !== "false";
@@ -501,6 +504,160 @@
                 internalOptions === data.internalOptions
                 ? data
                 : { ...data, modelConfigBySlug, internalOptions };
+        };
+        const formatLink = (reference) => {
+            const url = native.referenceUrl(reference);
+            const title = native.referenceText(reference);
+            return url ? native.markdownLink(title ?? url, url) : (title ?? "");
+        };
+        const messageText = (item, sources = []) => {
+            const references = item.contentReferences;
+            const parts = [];
+            const nodes = [
+                { node: native.parseMarkdown(item.content), prefix: "" },
+            ];
+            for (const { node, prefix, end: parentEnd } of nodes) {
+                const start = node.position?.start.offset;
+                const end = node.position?.end.offset;
+                if (start == null || end == null) continue;
+                if (
+                    ["leafDirective", "textDirective"].includes(node.type) &&
+                    node.name === "chatgpt-content-reference"
+                ) {
+                    const match = native.resolveReference(
+                        node.attributes,
+                        references,
+                    );
+                    if (match)
+                        parts.push({
+                            start,
+                            end,
+                            prefix,
+                            reference: match.reference,
+                        });
+                } else if (node.type === "text") {
+                    // 引用标题可含行内格式，标记可能跨越相邻的 Markdown 节点。
+                    for (const match of item.content
+                        .slice(start, parentEnd)
+                        .matchAll(/\uE200[^\uE200\uE201]*\uE201/g)) {
+                        const offset = start + match.index;
+                        if (offset >= end) break;
+                        const marker = match[0];
+                        const reference = native.resolveReference(
+                            { marker_text: marker },
+                            references,
+                        )?.reference ?? {
+                            type: marker.slice(1, -1).split("\uE202")[0],
+                            matched_text: marker,
+                        };
+                        parts.push({
+                            start: offset,
+                            end: offset + marker.length,
+                            prefix,
+                            reference,
+                        });
+                    }
+                } else if (node.children) {
+                    let continuation = prefix;
+                    if (node.type === "blockquote") continuation += "> ";
+                    else if (node.type === "listItem") {
+                        const first = node.children[0]?.position?.start.offset;
+                        if (first != null)
+                            continuation = item.content
+                                .slice(
+                                    item.content.lastIndexOf("\n", first - 1) +
+                                        1,
+                                    first,
+                                )
+                                .replace(/>(?![ \t])/g, "> ")
+                                .replace(/[^> \t]/g, " ");
+                    }
+                    nodes.push(
+                        ...node.children.map((node) => ({
+                            node,
+                            prefix: continuation,
+                            end,
+                        })),
+                    );
+                }
+            }
+            let content = "";
+            let offset = 0;
+            for (const part of parts.sort((a, b) => a.start - b.start)) {
+                const { reference } = part;
+                let text;
+                if (reference.model_dil_v2) {
+                    const markdown = native.fallbackMarkdown(reference);
+                    if (markdown == null)
+                        throw new Error("富文本消息的 Markdown 尚未载入");
+                    text = messageText(
+                        {
+                            content: markdown,
+                            contentReferences:
+                                reference.source_content_references ?? [],
+                        },
+                        Object.values(
+                            reference.model_dil_v2.appData?.opGenui
+                                ?.componentResults ?? {},
+                        ).flatMap((component) =>
+                            component.componentName === "Cite"
+                                ? (component.state?.items ?? [])
+                                : [],
+                        ),
+                    );
+                } else if (reference.category === "code_block") {
+                    text = native
+                        .markdown({
+                            type: "code",
+                            lang: reference.data.language,
+                            value: native.codeContent(reference.data),
+                        })
+                        .trimEnd();
+                } else if (reference.category !== "visualization") {
+                    const links = native.referenceSources(reference);
+                    const [type, ...values] =
+                        reference.matched_text?.startsWith("\uE200")
+                            ? reference.matched_text
+                                  .slice(1, -1)
+                                  .split("\uE202")
+                            : [];
+                    if (links.length) {
+                        text = links.map(formatLink).filter(Boolean).join(" ");
+                    } else if (type === "url" && values.length === 2) {
+                        text = formatLink({
+                            title: values[0],
+                            url: values[1],
+                        });
+                    } else if (type === "cite") {
+                        text = values
+                            .map((id) =>
+                                sources.find((source) => source.ref_id === id),
+                            )
+                            .filter(Boolean)
+                            .map(formatLink)
+                            .filter(Boolean)
+                            .join(" ");
+                    } else {
+                        text =
+                            reference.link_markdown ??
+                            reference.data?.content ??
+                            native.referenceText(reference) ??
+                            native.markerText(reference);
+                    }
+                }
+                content += item.content.slice(offset, part.start);
+                content +=
+                    typeof text === "string"
+                        ? text.replaceAll("\n", `\n${part.prefix}`)
+                        : item.content.slice(part.start, part.end);
+                offset = part.end;
+            }
+            content += item.content.slice(offset);
+            return native.messageText({
+                ...item,
+                content,
+                contentReferences: references,
+            });
         };
         const bridge = {
             register(values) {
@@ -950,19 +1107,13 @@
                     { throwOnError: true },
                 );
             },
-            async loadTurns(includeDetails = false) {
+            getTurns(includeDetails = false) {
                 const conversation = current();
                 const scope = appScope;
                 if (!conversation) throw new Error("当前会话尚未载入");
-                if (!conversation.readOnly) {
-                    if (!scope) throw new Error("当前会话状态尚未载入");
-                    await native.loadHistory(
-                        scope,
-                        conversation.serverId ?? conversation.id,
-                    );
-                }
+                if (!scope && (includeDetails || !conversation.readOnly))
+                    throw new Error("当前会话状态尚未载入");
                 if (includeDetails) {
-                    if (!scope) throw new Error("当前会话状态尚未载入");
                     const messages = native.messages({
                         current_node: scope.get(
                             native.currentNode,
@@ -1041,19 +1192,38 @@
                         }
                         return text ? `${tool}\n${text}` : "";
                     }
+                    if (chatgptCopyRawEnabled)
+                        return native.messageContent(message);
                     const rendered = native.renderMessage(message);
                     return rendered
-                        ? native.messageText({
+                        ? messageText({
                               content: rendered.markdown,
                               contentReferences: rendered.contentReferences,
                           })
                         : "";
                 }
+                if (
+                    chatgptCopyRawEnabled &&
+                    ["user-message", "assistant-message"].includes(item.type)
+                ) {
+                    const mapping = appScope?.get(
+                        native.mapping,
+                        current()?.id,
+                    );
+                    return (item.sourceMessageIds ?? [item.messageId])
+                        .map((id) => {
+                            const message = mapping?.[id]?.message;
+                            if (!message) throw new Error("原始消息尚未载入");
+                            return native.messageContent(message);
+                        })
+                        .filter(Boolean)
+                        .join("\n\n");
+                }
                 if (item.type === "user-message") return item.message;
                 if (item.type === "assistant-message") {
                     if (!native.messageText)
                         throw new Error("原生复制接口尚未载入");
-                    return native.messageText(item);
+                    return messageText(item);
                 }
                 return "";
             },
@@ -1210,7 +1380,7 @@
         }
     }
 
-    function getChatgptModuleExports(source) {
+    function getChatgptModuleExports(source, gettersOnly = false) {
         const [, exports, require] = source.match(
             /^[^(]+\([^,]+,([^,]+),([^)]*)\)\{/,
         );
@@ -1220,12 +1390,13 @@
         );
         return Object.fromEntries(
             [...source.matchAll(pattern)].flatMap((match) =>
-                [match[1], match[2] ?? ""].flatMap((table) =>
-                    [
-                        ...table.matchAll(
-                            /(?:^|,)([\w$]+):(?:\(\)=>)?([\w$.]+)/g,
-                        ),
-                    ].map((entry) => [entry[1], entry[2]]),
+                (gettersOnly ? [match[1]] : [match[1], match[2] ?? ""]).flatMap(
+                    (table) =>
+                        [
+                            ...table.matchAll(
+                                /(?:^|,)([\w$]+):(?:\(\)=>)?([\w$.]+)/g,
+                            ),
+                        ].map((entry) => [entry[1], entry[2]]),
                 ),
             ),
         );
@@ -1249,7 +1420,7 @@
                     ),
                 );
                 const members = Object.entries(
-                    getChatgptModuleExports(target.source),
+                    getChatgptModuleExports(target.source, true),
                 )
                     .filter(([, name]) => declarations.has(name))
                     .map(([key, name]) => `${JSON.stringify(key)}:${name}`)
@@ -1412,24 +1583,6 @@
         );
 
         module(
-            "完整会话模块",
-            (source) =>
-                source.includes('queryKey:["chatgpt-conversation-full",') &&
-                source.includes("forceFull:!0"),
-            (history) => {
-                const loadHistory = exported(
-                    history,
-                    "完整会话加载接口",
-                    (source) =>
-                        source.includes(
-                            'queryKey:["chatgpt-conversation-full",',
-                        ),
-                );
-                bindings.loadHistory = [history.id, loadHistory.exportName];
-            },
-        );
-
-        module(
             "会话内容模块",
             (source) =>
                 source.includes("context_truncation_continuation:") &&
@@ -1535,6 +1688,103 @@
                     messages.id,
                     renderMessage.exportName,
                 ];
+            },
+        );
+
+        module(
+            "富文本正文模块",
+            (source) => source.includes("fallbackMarkdownVersion:"),
+            (markdown) => {
+                const fallback = exported(
+                    markdown,
+                    "富文本 Markdown",
+                    (source) => source.includes(".fallbackMarkdown"),
+                );
+                bindings.fallbackMarkdown = [markdown.id, fallback.exportName];
+            },
+        );
+
+        module(
+            "内容引用模块",
+            (source) =>
+                source.includes('"chatgpt-content-reference"') &&
+                source.includes("content_references_by_file:"),
+            (references) => {
+                for (const [name, predicate] of [
+                    [
+                        "referenceSources",
+                        (source) =>
+                            source.includes(".fallback_items") &&
+                            source.includes(".sources"),
+                    ],
+                    [
+                        "referenceText",
+                        (source) =>
+                            source.includes(".alt") &&
+                            source.includes(".prompt_text") &&
+                            source.indexOf(".alt") < source.indexOf(".title"),
+                    ],
+                    [
+                        "referenceUrl",
+                        (source) =>
+                            source.includes(".cloud_doc_url") &&
+                            source.includes(".source_url"),
+                    ],
+                    [
+                        "markerText",
+                        (source) => source.includes(".payload.length"),
+                    ],
+                ]) {
+                    const fn = exported(references, name, predicate);
+                    bindings[name] = [references.id, fn.exportName];
+                }
+            },
+        );
+
+        module(
+            "代码块正文模块",
+            (source) =>
+                source.includes("has_redundant_fences:") &&
+                source.includes(".children"),
+            (code) => {
+                const content = exported(code, "代码块复制正文", (source) =>
+                    source.includes("has_redundant_fences:"),
+                );
+                bindings.codeContent = [code.id, content.exportName];
+            },
+        );
+
+        module(
+            "Markdown 序列化模块",
+            (source) =>
+                source.includes('"data-prompt-link-href"') &&
+                source.includes("resourceLink:!0"),
+            (markdown) => {
+                const link = exported(markdown, "Markdown 链接", (source) =>
+                    source.includes("resourceLink:!0"),
+                );
+                bindings.markdownLink = [markdown.id, link.exportName];
+                const [, serialize] = single(
+                    [
+                        ...link
+                            .toString()
+                            .matchAll(/\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/g),
+                    ],
+                    "Markdown 序列化接口",
+                );
+                const [name, exportName] = serialize.split(".");
+                const [, id] = single(
+                    [
+                        ...markdown.source.matchAll(
+                            new RegExp(
+                                `${RegExp.escape(name)}=[\\w$]+\\("([^"]+)"\\)`,
+                                "g",
+                            ),
+                        ),
+                    ],
+                    "Markdown 序列化模块",
+                );
+                bindings.markdown = [id, exportName];
             },
         );
 
@@ -1778,7 +2028,26 @@
                     ],
                     "原生消息复制接口",
                 )[2];
-                append(messages, `${api}.register({messageText:${copyText}});`);
+                const [, parse, extensions, mdastExtensions] = single(
+                    [
+                        ...messages.source.matchAll(
+                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,\{extensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\],mdastExtensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\]\}\)/g,
+                        ),
+                    ],
+                    "原生 Markdown 解析器",
+                );
+                const [, resolve] = single(
+                    [
+                        ...messages.source.matchAll(
+                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+,[\w$]+\.contentReferences\)/g,
+                        ),
+                    ],
+                    "原生引用解析接口",
+                );
+                append(
+                    messages,
+                    `${api}.register({messageText:${copyText},parseMarkdown:content=>${parse}(content,{extensions:[${extensions}()],mdastExtensions:[${mdastExtensions}()]}),resolveReference:${resolve}});`,
+                );
                 const approval = single(
                     [
                         ...messages.source.matchAll(
@@ -2601,9 +2870,9 @@
         button.disabled = !ready;
         bindChatgptCopyButton(
             button,
-            async () => {
+            () => {
                 const currentTurns =
-                    await pageWindow.__checkerNextRuntimeModelBridge.loadTurns(
+                    pageWindow.__checkerNextRuntimeModelBridge.getTurns(
                         chatgptCopyDetailsEnabled,
                     );
                 if (!Array.isArray(currentTurns)) {
@@ -2927,6 +3196,46 @@
                         border-radius: 16px;
                     "></span>
                     <span id="chatgpt-copy-button-slider-dot" style="
+                        position: absolute;
+                        content: '';
+                        height: 10px;
+                        width: 10px;
+                        left: 3px;
+                        bottom: 3px;
+                        background-color: white;
+                        transition: 0.3s;
+                        border-radius: 50%;
+                    "></span>
+                </label>
+            </div>
+            <div id="chatgpt-copy-raw-container" style="display: flex; align-items: center; justify-content: space-between;">
+                <span>复制原始格式
+                <span id="chatgpt-copy-raw-tooltip" style="
+                    cursor: pointer;
+                    font-size: 12px;
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    text-align: center;
+                    line-height: 14px;
+                    border: 1px solid #fff;
+                    border-radius: 50%;
+                    margin-left: 3px;
+                ">?</span></span>
+                <label style="position: relative; display: inline-block; width: 28px; height: 16px;">
+                    <input type="checkbox" id="chatgpt-copy-raw-toggle" style="opacity: 0; width: 0; height: 0;">
+                    <span id="chatgpt-copy-raw-slider" style="
+                        position: absolute;
+                        cursor: pointer;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-color: #555;
+                        transition: 0.3s;
+                        border-radius: 16px;
+                    "></span>
+                    <span id="chatgpt-copy-raw-slider-dot" style="
                         position: absolute;
                         content: '';
                         height: 10px;
@@ -3426,6 +3735,11 @@
             "在右上角显示复制全文按钮。",
         );
 
+        const chatgptCopyRawTooltipBox = createTooltip(
+            "chatgpt-copy-raw-tooltip-box",
+            "复制呈现 <Link>、<Cite> 等标签的原始格式。",
+        );
+
         const chatgptCopyDetailsTooltipBox = createTooltip(
             "chatgpt-copy-details-tooltip-box",
             "复制全文包括思考与工具调用内容。",
@@ -3498,6 +3812,10 @@
             bindTooltipEvents(
                 "chatgpt-copy-button-tooltip",
                 chatgptCopyButtonTooltipBox,
+            );
+            bindTooltipEvents(
+                "chatgpt-copy-raw-tooltip",
+                chatgptCopyRawTooltipBox,
             );
             bindTooltipEvents(
                 "chatgpt-copy-details-tooltip",
@@ -3712,6 +4030,14 @@
                 },
             );
             bindChatgptCopyButtonToggle();
+            bindToggle(
+                "chatgpt-copy-raw",
+                chatgptCopyRawEnabled,
+                CHATGPT_COPY_RAW_KEY,
+                (value) => {
+                    chatgptCopyRawEnabled = value;
+                },
+            );
             bindToggle(
                 "chatgpt-copy-details",
                 chatgptCopyDetailsEnabled,
