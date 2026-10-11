@@ -193,5 +193,20 @@
   "Dots 消息状态尚未载入": "Dots 메시지 상태가 아직 로드되지 않음",
   "[CheckerNext] 复制失败:": "[CheckerNext] 복사 실패:",
   "消息中没有可复制的正文": "메시지에 복사할 본문이 없습니다.",
-  "复制消息": "메시지 복사"
+  "复制消息": "메시지 복사",
+  "富文本消息的 Markdown 尚未载入": null,
+  "原始消息尚未载入": null,
+  "富文本正文模块": null,
+  "富文本 Markdown": null,
+  "内容引用模块": null,
+  "代码块正文模块": null,
+  "代码块复制正文": null,
+  "Markdown 序列化模块": null,
+  "Markdown 链接": null,
+  "Markdown 序列化接口": null,
+  "原生 Markdown 解析器": null,
+  "原生引用解析接口": null,
+  "复制原始格式": null,
+  "复制呈现": null,
+  "等标签的原始格式。": null
 }
