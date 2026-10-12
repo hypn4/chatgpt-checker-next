@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.2.1.0
+// @version      5.2.1.1
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -589,7 +589,7 @@
                 if (reference.model_dil_v2) {
                     const markdown = native.fallbackMarkdown(reference);
                     if (markdown == null)
-                        throw new Error("富文本消息的 Markdown 尚未载入");
+                        throw new Error("서식 있는 메시지의 Markdown을 아직 불러오지 못했습니다.");
                     text = messageText(
                         {
                             content: markdown,
@@ -1213,7 +1213,7 @@
                     return (item.sourceMessageIds ?? [item.messageId])
                         .map((id) => {
                             const message = mapping?.[id]?.message;
-                            if (!message) throw new Error("原始消息尚未载入");
+                            if (!message) throw new Error("원본 메시지가 아직 로드되지 않음");
                             return native.messageContent(message);
                         })
                         .filter(Boolean)
@@ -1692,12 +1692,12 @@
         );
 
         module(
-            "富文本正文模块",
+            "서식 있는 본문 모듈",
             (source) => source.includes("fallbackMarkdownVersion:"),
             (markdown) => {
                 const fallback = exported(
                     markdown,
-                    "富文本 Markdown",
+                    "서식 있는 텍스트의 Markdown",
                     (source) => source.includes(".fallbackMarkdown"),
                 );
                 bindings.fallbackMarkdown = [markdown.id, fallback.exportName];
@@ -1705,7 +1705,7 @@
         );
 
         module(
-            "内容引用模块",
+            "콘텐츠 참조 모듈",
             (source) =>
                 source.includes('"chatgpt-content-reference"') &&
                 source.includes("content_references_by_file:"),
@@ -1742,12 +1742,12 @@
         );
 
         module(
-            "代码块正文模块",
+            "코드 블록 본문 모듈",
             (source) =>
                 source.includes("has_redundant_fences:") &&
                 source.includes(".children"),
             (code) => {
-                const content = exported(code, "代码块复制正文", (source) =>
+                const content = exported(code, "코드 블록 복사용 본문", (source) =>
                     source.includes("has_redundant_fences:"),
                 );
                 bindings.codeContent = [code.id, content.exportName];
@@ -1755,12 +1755,12 @@
         );
 
         module(
-            "Markdown 序列化模块",
+            "Markdown 직렬화 모듈",
             (source) =>
                 source.includes('"data-prompt-link-href"') &&
                 source.includes("resourceLink:!0"),
             (markdown) => {
-                const link = exported(markdown, "Markdown 链接", (source) =>
+                const link = exported(markdown, "Markdown 링크", (source) =>
                     source.includes("resourceLink:!0"),
                 );
                 bindings.markdownLink = [markdown.id, link.exportName];
@@ -1770,7 +1770,7 @@
                             .toString()
                             .matchAll(/\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/g),
                     ],
-                    "Markdown 序列化接口",
+                    "Markdown 직렬화 인터페이스",
                 );
                 const [name, exportName] = serialize.split(".");
                 const [, id] = single(
@@ -1782,7 +1782,7 @@
                             ),
                         ),
                     ],
-                    "Markdown 序列化模块",
+                    "Markdown 직렬화 모듈",
                 );
                 bindings.markdown = [id, exportName];
             },
@@ -2034,7 +2034,7 @@
                             /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,\{extensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\],mdastExtensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\]\}\)/g,
                         ),
                     ],
-                    "原生 Markdown 解析器",
+                    "네이티브 Markdown 파서",
                 );
                 const [, resolve] = single(
                     [
@@ -2042,7 +2042,7 @@
                             /\(0,([\w$]+\.[\w$]+)\)\([\w$]+,[\w$]+\.contentReferences\)/g,
                         ),
                     ],
-                    "原生引用解析接口",
+                    "네이티브 참조 파싱 인터페이스",
                 );
                 append(
                     messages,
@@ -3209,7 +3209,7 @@
                 </label>
             </div>
             <div id="chatgpt-copy-raw-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>复制原始格式
+                <span>원본 형식으로 복사
                 <span id="chatgpt-copy-raw-tooltip" style="
                     cursor: pointer;
                     font-size: 12px;
@@ -3737,7 +3737,7 @@
 
         const chatgptCopyRawTooltipBox = createTooltip(
             "chatgpt-copy-raw-tooltip-box",
-            "复制呈现 <Link>、<Cite> 等标签的原始格式。",
+            "표시되는 <Link>、<Cite> 등 태그의 원본 형식을 복사합니다.",
         );
 
         const chatgptCopyDetailsTooltipBox = createTooltip(
