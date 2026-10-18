@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.3.0.0
+// @version      5.3.0.1
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -767,7 +767,7 @@
                         catalog: props.models,
                         models,
                         loading: Boolean(props.isLoading),
-                        sourceError: props.isError ? "模型目录读取失败" : null,
+                        sourceError: props.isError ? "모델 목록 불러오기 실패" : null,
                         onModelChange: props.onModelChange,
                         onThinkingEffortChange: props.onThinkingEffortChange,
                     });
@@ -1691,7 +1691,7 @@
                 bindings.useScope = [scopes.id, useScope.exportName];
                 const useValue = exported(
                     scopes,
-                    "状态订阅接口",
+                    "상태 구독 인터페이스",
                     (source) =>
                         source.includes("cacheKey") &&
                         source.includes(".enabled") &&
@@ -1714,12 +1714,12 @@
         );
 
         module(
-            "侧栏导航组件模块",
+            "사이드바 탐색 컴포넌트 모듈",
             (source) =>
                 source.includes("sidebar.navItem.unread") &&
                 source.includes("excludeFromNavigation:"),
             (navigation) => {
-                const item = exported(navigation, "侧栏导航项", (source) =>
+                const item = exported(navigation, "사이드바 탐색 항목", (source) =>
                     source.includes("sidebar.navItem.unread"),
                 );
                 append(
@@ -1730,12 +1730,12 @@
         );
 
         module(
-            "侧栏行组件模块",
+            "사이드바 행 컴포넌트 모듈",
             (source) =>
                 source.includes("hasNavigationLink:") &&
                 source.includes("data-sidebar-cycle-item"),
             (row) => {
-                const render = exported(row, "侧栏行", (source) =>
+                const render = exported(row, "사이드바 행", (source) =>
                     source.includes("hasNavigationLink:"),
                 );
                 append(
@@ -1747,7 +1747,7 @@
 
         const sidebarButton = /let ([\w$]+)=[\w$]+=>\{let\{type:/;
         module(
-            "侧栏按钮链接模块",
+            "사이드바 버튼 링크 모듈",
             (source) =>
                 sidebarButton.test(source) && source.includes('"data-uniform"'),
             (button) => {
@@ -1757,7 +1757,7 @@
         );
 
         module(
-            "侧栏路由模块",
+            "사이드바 라우팅 모듈",
             (source) =>
                 source.includes("destinationId:") &&
                 source.includes('rail:"fixed"') &&
@@ -1770,7 +1770,7 @@
                         ([, name]) =>
                             !routes.source.includes(`function ${name}(`),
                     ),
-                    "侧栏路由表",
+                    "사이드바 라우팅 테이블",
                 );
                 bindings.sidebarRoutes = [routes.id, exportName];
             },
@@ -1779,7 +1779,7 @@
         for (const [name, label, predicate, resolve] of [
             [
                 "dotHref",
-                "Dot 导航地址",
+                "Dot 이동 주소",
                 (source) =>
                     source.includes('"/dots"') && source.includes("orbitId"),
                 (source) =>
@@ -1788,13 +1788,13 @@
             ],
             [
                 "projectHref",
-                "项目导航地址",
+                "프로젝트 이동 주소",
                 (source) => source.includes('"/g/:projectId/project"'),
                 (source) => source.includes("}/project`"),
             ],
             [
                 "libraryHref",
-                "资料库导航地址",
+                "라이브러리 이동 주소",
                 (source) => source.includes("library-display-preferences:"),
                 (source) =>
                     source.includes('"/library"') &&
@@ -1808,8 +1808,8 @@
         }
 
         for (const [label, marker] of [
-            ["侧栏导航入口模块", 'animatedIcon:"sidebar-new-chat"'],
-            ["侧栏图标入口模块", "data-slate-sidebar-peek-area"],
+            ["사이드바 탐색 진입점 모듈", 'animatedIcon:"sidebar-new-chat"'],
+            ["사이드바 아이콘 진입점 모듈", "data-slate-sidebar-peek-area"],
         ]) {
             module(
                 label,
@@ -1826,7 +1826,7 @@
         }
 
         module(
-            "新建聊天导航按钮模块",
+            "새 채팅 이동 버튼 모듈",
             (source) =>
                 source.includes("newChatMessage:") &&
                 source.includes("disabled:") &&
@@ -1834,7 +1834,7 @@
             (button) => {
                 const [, start] = single(
                     [...button.source.matchAll(/onStartChat:([\w$]+)/g)],
-                    "新建聊天操作",
+                    "새 채팅 동작",
                 );
                 replace(
                     button,
@@ -1846,7 +1846,7 @@
 
         const projectRow = /projectId:([\w$]+),actions:[\w$]+/g;
         module(
-            "项目侧栏链接模块",
+            "프로젝트 사이드바 링크 모듈",
             (source) =>
                 source.includes("onOpenProject:") &&
                 source.includes("excludePinnedConversations:") &&
@@ -1854,7 +1854,7 @@
             (project) => {
                 const row = single(
                     [...project.source.matchAll(projectRow)],
-                    "项目侧栏行",
+                    "프로젝트 사이드바 행",
                 );
                 replace(
                     project,
@@ -1865,7 +1865,7 @@
         );
 
         module(
-            "侧栏功能入口模块",
+            "사이드바 기능 진입점 모듈",
             (source) =>
                 source.includes('animatedIcon:"sidebar-images"') &&
                 source.includes('animatedIcon:"sidebar-library"'),
@@ -1948,7 +1948,7 @@
         );
 
         module(
-            "Dots 消息组件模块",
+            "Dots 메시지 컴포넌트 모듈",
             (source) =>
                 source.includes("message-inline-actions--orbit") &&
                 source.includes("className:`message-row ${"),
@@ -1959,7 +1959,7 @@
                             /function ([\w$]+)\(e\)\{(?:(?!function [\w$]+\()[\s\S])*?className:`message-row \$\{/g,
                         ),
                     ],
-                    "Dots 消息行",
+                    "Dots 메시지 행",
                 )[1];
                 const actions = single(
                     [
@@ -1967,7 +1967,7 @@
                             /function ([\w$]+)\(e\)\{(?:(?!function [\w$]+\()[\s\S])*?`message-inline-actions\$\{/g,
                         ),
                     ],
-                    "Dots 消息操作栏",
+                    "Dots 메시지 액션 바",
                 )[1];
                 append(
                     messages,
@@ -1977,7 +1977,7 @@
         );
 
         module(
-            "分析内容模块",
+            "분석 내용 모듈",
             (source) =>
                 source.includes("allowCollapseBeforeFinal:") &&
                 source.includes("preventAutoCollapse:") &&
@@ -1985,7 +1985,7 @@
             (analysis) => {
                 const activity = exported(
                     analysis,
-                    "分析内容组件",
+                    "분석 내용 컴포넌트",
                     (source) =>
                         source.includes("allowCollapseBeforeFinal:") &&
                         source.includes("persistedCollapsed:"),
@@ -2261,7 +2261,7 @@
         const threadSettings =
             /[\w$]+=\(0,[\w$]+\.[\w$]+\)\("modelSettings"\),([\w$]+)=/;
         module(
-            "任务模型状态模块",
+            "작업 모델 상태 모듈",
             (source) => threadSettings.test(source),
             (state) => {
                 const settings = state.source.match(threadSettings)[1];
@@ -2271,7 +2271,7 @@
                             /function [\w$]+\(e,t\)\{return [\w$]+\(e,t\)\?\.getHostId\(\)\?\?e\.get\(([\w$]+),t\)\}/g,
                         ),
                     ],
-                    "任务宿主状态",
+                    "작업 호스트 상태",
                 )[1];
                 const exports = Object.entries(
                     getChatgptModuleExports(state.source),
@@ -2282,7 +2282,7 @@
                 ]) {
                     const [exportName] = single(
                         exports.filter(([, value]) => value === symbol),
-                        `${name} 原生导出`,
+                        `${name} 네이티브 내보내기`,
                     );
                     bindings[name] = [state.id, exportName];
                 }
@@ -2290,7 +2290,7 @@
         );
 
         module(
-            "任务客户端模块",
+            "작업 클라이언트 모듈",
             (source) =>
                 source.includes(".forHost(") &&
                 source.includes(".rpc.dup()") &&
@@ -2298,7 +2298,7 @@
             (client) => {
                 const access = exported(
                     client,
-                    "任务客户端接口",
+                    "작업 클라이언트 인터페이스",
                     (source) =>
                         source.includes(".forHost(") &&
                         source.includes(".rpc.dup()"),
@@ -2308,7 +2308,7 @@
         );
 
         module(
-            "任务模型目录模块",
+            "작업 모델 카탈로그 모듈",
             (source) =>
                 source.includes('"models","list"') &&
                 source.includes("modelCatalogPath:") &&
@@ -2316,7 +2316,7 @@
             (models) => {
                 const useModels = exported(
                     models,
-                    "任务模型目录接口",
+                    "작업 모델 카탈로그 인터페이스",
                     (source) =>
                         source.includes("model_catalog_json") &&
                         source.includes("additionalAvailableModels") &&
@@ -2468,7 +2468,7 @@
                 );
                 const resolveModel = exported(
                     models,
-                    "模型选项解析接口",
+                    "모델 옵션 파싱 인터페이스",
                     (source) =>
                         /^function [\w$]+\([\w$]+,[\w$]+\)\{/.test(source) &&
                         source.includes("defaultThinkingEffortByModelSlug") &&
@@ -2476,7 +2476,7 @@
                 );
                 const modelVersion = exported(
                     models,
-                    "模型版本解析接口",
+                    "모델 버전 파싱 인터페이스",
                     (source) =>
                         source.includes("versionOptions?.find") &&
                         source.includes(".slugs.includes("),
@@ -2708,7 +2708,7 @@
                             /return ([\w$]+)\?\.\(([\w$]+)\),\2\b/g,
                         ),
                     ],
-                    "完整账号查询结果",
+                    "전체 계정 조회 결과",
                 );
                 replace(
                     fullAccounts,
@@ -2771,7 +2771,7 @@
         if (chatgptCopyButtonEnabled) items.push("전체 대화 복사");
         if (chatgptMessageInfoEnabled) items.push("시간 및 모델 표시");
         if (chatgptApprovalEnabled) items.push("도구 요청 자동 승인");
-        if (chatgptAutoCollapseEnabled) items.push("自动收起分析内容");
+        if (chatgptAutoCollapseEnabled) items.push("분석 내용 자동 접기");
         if (chatgptFakePlanEnabled)
             items.push(`플랜 표시:${chatgptFakePlanValue}`);
         return items;
@@ -2885,7 +2885,7 @@
             text = !state || state.loading
                 ? "불러오는 중…"
                 : state.origin === "dot"
-                  ? "Dot 默认"
+                  ? "Dot 기본값"
                   : "기본값",
         ) => {
             const option = createOption("", text);
@@ -3813,7 +3813,7 @@
                 </label>
             </div>
             <div id="chatgpt-auto-collapse-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>自动收起分析内容
+                <span>분석 내용 자동 접기
                 <span id="chatgpt-auto-collapse-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -4239,7 +4239,7 @@
 
         const chatgptAutoCollapseTooltipBox = createTooltip(
             "chatgpt-auto-collapse-tooltip-box",
-            "默认收起分析执行内容。",
+            "분석 실행 내용을 기본적으로 접습니다.",
         );
 
         const chatgptSelectionPopoverTooltipBox = createTooltip(
@@ -5123,7 +5123,7 @@
     pageWindow.fetch = async function (resource, options) {
         const response = await originalFetch(resource, options);
         observeResponse(resource, options, response).catch((error) => {
-            console.error("[CheckerNext] 读取响应信息出错:", error);
+            console.error("[CheckerNext] 응답 정보 읽기 오류:", error);
         });
         return response;
     };
@@ -5164,7 +5164,7 @@
 
                 return;
             } catch (e) {
-                console.error("[CheckerNext] 处理挑战响应出错:", e);
+                console.error("[CheckerNext] 챌린지 응답 처리 중 오류:", e);
                 const difficultyElement = document.getElementById("difficulty");
                 if (difficultyElement) difficultyElement.innerText = "...";
                 updateDifficultyIndicator("...");
