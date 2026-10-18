@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.2.2.0
+// @version      5.3.0.1
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -41,6 +41,8 @@
     const CHATGPT_MESSAGE_INFO_EVENT = "checker-next-message-info";
     const CHATGPT_APPROVAL_KEY = "checker-next-chatgpt-approval";
     const CHATGPT_APPROVAL_EVENT = "checker-next-approval";
+    const CHATGPT_AUTO_COLLAPSE_KEY = "checker-next-chatgpt-auto-collapse";
+    const CHATGPT_AUTO_COLLAPSE_EVENT = "checker-next-auto-collapse";
     const CHATGPT_SELECTION_POPOVER_DISABLED_KEY =
         "checker-next-chatgpt-selection-popover-disabled";
     const CHATGPT_RUNTIME_MODEL_STATE_EVENT =
@@ -66,10 +68,14 @@
         localStorage.getItem(CHATGPT_MESSAGE_INFO_KEY) !== "false";
     let chatgptApprovalEnabled =
         isChatgptMode && localStorage.getItem(CHATGPT_APPROVAL_KEY) !== "false";
+    let chatgptAutoCollapseEnabled =
+        isChatgptMode &&
+        localStorage.getItem(CHATGPT_AUTO_COLLAPSE_KEY) !== "false";
     let chatgptSelectionPopoverDisabled =
         isChatgptMode &&
         localStorage.getItem(CHATGPT_SELECTION_POPOVER_DISABLED_KEY) === "true";
     let chatgptSelectionPopoverStyle;
+    let chatgptDotCopyStyle;
     let userRegionValue = null;
     let billingCurrency = null;
     let chatgptRuntimeModelState;
@@ -78,10 +84,6 @@
     let chatgptModuleInjectionStarted = false;
     let chatgptInjectionFailure;
     const chatgptReportedFailures = new Set();
-    const chatgptRuntimeModelCatalogs = {
-        chat: [],
-        work: [],
-    };
 
     if (isChatgptMode) {
         if (chatgptModuleInjectionEnabled) installChatgptModuleInjection();
@@ -89,6 +91,11 @@
             media: chatgptSelectionPopoverDisabled ? "all" : "not all",
             textContent:
                 '[role="presentation"].pointer-events-auto.w-fit.max-w-full.overflow-hidden:is(.pointer-events-none.w-max.fixed > *, .flex-wrap) { display: none !important; }',
+        });
+        chatgptDotCopyStyle = GM_addElement("style", {
+            media: chatgptCopyButtonEnabled ? "not all" : "all",
+            textContent:
+                ".checker-next-dot-copy-message { display: none !important; }",
         });
     }
     const NOT_STARTED_BADGE = "<span style=\"color:#9ca3af\"> (시작 전)</span>";
@@ -190,6 +197,7 @@
         const { location } = pageWindow;
         const conversations = new Map();
         const dotControllers = new Map();
+        let dotMessageContext;
         const origins = new Map();
         const customModels = new Map();
         const controls = new Set();
@@ -207,13 +215,8 @@
         let appScope,
             watchedEnvironmentScope,
             stopWatchingEnvironment,
-            watchedControl,
-            watchedScope,
-            watchedConversation,
             watchedPage,
-            stopWatching,
             homeScope,
-            thread,
             homeOrigin,
             scheduled = false,
             lastState;
@@ -226,6 +229,15 @@
             );
         const report = (error) =>
             console.error("[CheckerNext] 런타임 모듈 오류:", error);
+        const subscribeAutoCollapse = (listener) => {
+            pageWindow.addEventListener(CHATGPT_AUTO_COLLAPSE_EVENT, listener);
+            return () =>
+                pageWindow.removeEventListener(
+                    CHATGPT_AUTO_COLLAPSE_EVENT,
+                    listener,
+                );
+        };
+        const getAutoCollapse = () => chatgptAutoCollapseEnabled;
         const after = (fn, callback) => {
             function wrapped(...args) {
                 const result = fn.apply(this, args);
@@ -245,114 +257,32 @@
             return match ? decodeURIComponent(match[1]) : null;
         };
         const current = () => conversations.get(routeId());
-        const watchThread = (scope, conversationId) =>
-            scope.watch((scope) => {
-                const manager = native.threadManager?.(scope, conversationId);
-                if (!manager) {
-                    scheduleState();
-                    return;
-                }
-                const state = {
-                    manager,
-                    conversationId,
-                    model: null,
-                    models: [],
-                    error: null,
-                };
-                thread = state;
-                const update = (model, thinkingEffort) => {
-                    if (
-                        thread !== state ||
-                        (state.model?.slug === model &&
-                            state.model?.thinkingEffort === thinkingEffort)
-                    )
-                        return;
-                    state.model = { slug: model, thinkingEffort };
-                    state.error = null;
-                    scheduleState();
-                };
-                state.read = async () => {
-                    const previous = state.model;
-                    const { thread: value } = await manager.readThread(
-                        state.conversationId,
-                    );
-                    if (state.model === previous)
-                        update(value.model, value.reasoningEffort);
-                };
-                const stopConversation = manager.addConversationCallback(
-                    state.conversationId,
-                    (conversation) => {
-                        if (conversation?.latestModel)
-                            update(
-                                conversation.latestModel,
-                                conversation.latestReasoningEffort,
-                            );
-                    },
-                );
-                const stopNotifications = manager.addNotificationCallback(
-                    "thread/settings/updated",
-                    ({ params }) => {
-                        if (params.threadId === state.conversationId)
-                            update(
-                                params.threadSettings.model,
-                                params.threadSettings.effort,
-                            );
-                    },
-                );
-                Promise.all([
-                    state.read(),
-                    manager.sendRequest("model/list", {
-                        includeHidden: true,
-                        cursor: null,
-                        limit: 100,
-                    }),
-                ])
-                    .then(([, catalog]) => {
-                        if (thread !== state) return;
-                        state.models = catalog.data.map((model) => ({
-                            slug: model.model,
-                            title: model.displayName,
-                            thinkingEfforts:
-                                model.supportedReasoningEfforts.map(
-                                    (effort) => effort.reasoningEffort,
-                                ),
-                            defaultThinkingEffort: model.defaultReasoningEffort,
-                        }));
-                        scheduleState();
-                    })
-                    .catch((error) => {
-                        if (thread !== state) return;
-                        state.error = String(error);
-                        report(error);
-                        scheduleState();
-                    });
+        const useControl = (scope, value) => {
+            const control = native.useRef({}).current;
+            const route = scope.getOwnValue(native.routeScope);
+            native.useLayoutEffect(() => {
+                if (
+                    control.route !== route ||
+                    control.conversationId !== value.conversationId
+                )
+                    control.error = null;
+                Object.assign(control, value, { scope, route });
+                controls.add(control);
+                scheduleState();
                 return () => {
-                    stopConversation();
-                    stopNotifications();
-                    if (thread === state) thread = undefined;
+                    controls.delete(control);
+                    scheduleState();
                 };
-            });
+            }, [control, scope, route, value]);
+        };
         const scheduleState = () => {
             if (scheduled) return;
             scheduled = true;
             queueMicrotask(() => {
                 scheduled = false;
                 const active = activeControl();
-                const scope = active?.scope;
-                const conversationId = active?.conversationId;
                 const page = location.pathname + location.search;
-                if (
-                    watchedControl !== active ||
-                    watchedScope?.node !== scope?.node ||
-                    watchedConversation !== conversationId ||
-                    watchedPage !== page
-                ) {
-                    stopWatching?.();
-                    stopWatching = undefined;
-                    thread = undefined;
-                    watchedControl = active;
-                    watchedScope = scope;
-                    watchedConversation = conversationId;
+                if (watchedPage !== page) {
                     watchedPage = page;
                     const conversation = current();
                     for (const [key, value] of conversations) {
@@ -360,26 +290,27 @@
                     }
                 }
                 const isDot = active?.kind === "dot";
-                if (isDot && !stopWatching)
-                    stopWatching = watchThread(scope, active.conversationId);
-                const model = isDot ? thread?.model : active?.selectedModel;
+                const model = active?.selectedModel;
                 const state = {
                     ready: true,
                     pathname: location.pathname,
                     search: location.search,
                     copyReady: current()?.copyReady ?? false,
                     available: Boolean(
-                        model?.slug && (isDot || active?.onModelChange),
+                        active &&
+                            !active.loading &&
+                            (isDot || (model?.slug && active.onModelChange)),
                     ),
+                    loading: active?.loading ?? true,
                     origin: isDot
                         ? "dot"
                         : active?.isWorkConversation
                           ? "work"
                           : "chat",
-                    model: model?.slug ?? null,
+                    model: model?.slug?.trim() || null,
                     thinkingEffort: model?.thinkingEffort ?? null,
-                    models: isDot ? thread?.models : undefined,
-                    error: active?.error ?? (isDot ? thread?.error : undefined),
+                    models: active?.models ?? [],
+                    error: active?.error ?? active?.sourceError ?? null,
                 };
                 const serialized = JSON.stringify(state);
                 if (serialized === lastState) return;
@@ -436,17 +367,17 @@
                 ? conversation
                 : { ...conversation, conversation_origin: origin };
         };
+        const modelOptions = (data) => [
+            ...(data?.options ?? []),
+            ...(data?.internalOptions ?? []),
+            ...(data?.versionOptions?.flatMap((version) => version.options) ??
+                []),
+        ];
         const extendModels = (data) => {
             if (!data || customModels.size === 0) return data;
             let modelConfigBySlug = data.modelConfigBySlug;
             let internalOptions = data.internalOptions;
-            const options = [
-                ...(data.options ?? []),
-                ...(internalOptions ?? []),
-                ...(data.versionOptions?.flatMap(
-                    (version) => version.options,
-                ) ?? []),
-            ];
+            const options = modelOptions(data);
             for (const [slug, efforts] of customModels) {
                 const model = modelConfigBySlug?.[slug] ?? { title: slug };
                 const additions = [...efforts].filter(
@@ -659,6 +590,36 @@
                 contentReferences: references,
             });
         };
+        const sidebarHref = (props) => {
+            if (props["data-checker-next-href"])
+                return props["data-checker-next-href"];
+            if (props.animatedIcon === "sidebar-new-chat") return "/";
+            if (props.animatedIcon === "sidebar-projects") return "/projects";
+            const destination = props["data-sidebar-destination"];
+            if (!destination) return;
+            const prefix = "builtin:orbit:";
+            if (destination.startsWith(prefix))
+                return native.dotHref(destination.slice(prefix.length));
+            return Object.values(native.sidebarRoutes).find(
+                (route) => route.destinationId === destination,
+            )?.path;
+        };
+        const sidebarClick = (onClick) => (event) => {
+            if (
+                event.defaultPrevented ||
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+            )
+                return;
+            try {
+                onClick(event);
+            } finally {
+                event.preventDefault();
+            }
+        };
         const bridge = {
             register(values) {
                 Object.assign(native, values);
@@ -670,6 +631,68 @@
                     ? appScope?.get(key)?.formatDateToParts(value, options)
                     : undefined;
             },
+            sidebarNav(fn) {
+                return function (props) {
+                    const to = sidebarHref(props);
+                    return native.createElement(
+                        fn,
+                        to && !props.to && !props.disabled
+                            ? {
+                                  ...props,
+                                  to,
+                                  onClick: props.onClick
+                                      ? sidebarClick(props.onClick)
+                                      : undefined,
+                              }
+                            : props,
+                    );
+                };
+            },
+            sidebarButton(fn) {
+                return function (props) {
+                    const button = fn(props);
+                    const href = sidebarHref(props);
+                    if (!href || button.props.disabled) return button;
+                    const { type, disabled, onClick, ...attributes } =
+                        button.props;
+                    return native.createElement("a", {
+                        ...attributes,
+                        href,
+                        onClick: onClick ? sidebarClick(onClick) : undefined,
+                    });
+                };
+            },
+            sidebarRow(fn) {
+                return function (props) {
+                    const href = sidebarHref(props);
+                    if (!href || props.hasNavigationLink || props.isDisabled)
+                        return native.createElement(fn, props);
+                    const [content, ...actions] = props.children;
+                    return native.createElement(
+                        fn,
+                        { ...props, hasNavigationLink: true },
+                        native.createElement(
+                            "a",
+                            {
+                                href,
+                                draggable: false,
+                                "data-interactive-row-link": true,
+                                "aria-label": props["aria-label"],
+                                "aria-labelledby": props["aria-labelledby"],
+                                "aria-current": props.isActive
+                                    ? "page"
+                                    : undefined,
+                                className:
+                                    "flex min-w-0 flex-1 before:pointer-events-auto before:absolute before:inset-0 before:-z-10 before:rounded-[inherit] focus-visible:before:outline focus-visible:before:outline-2 focus-visible:before:outline-offset-[-2px] focus-visible:before:outline-ring",
+                            },
+                            content,
+                        ),
+                        ...actions,
+                    );
+                };
+            },
+            projectHref: (id) => native.projectHref(id),
+            libraryHref: (scope) => native.libraryHref(scope),
             scope(fn) {
                 return after(fn, (_, scope) => {
                     if (!pageWindow.__checkerNextModulesInstalled) {
@@ -694,49 +717,120 @@
                     }
                 });
             },
-            picker(fn, kind = "chat") {
+            picker(fn) {
                 return function (props) {
-                    const scope = native.useScope(
-                        kind === "dot"
-                            ? native.routeScope
-                            : native.composerScope,
+                    const scope = native.useScope(native.composerScope);
+                    const models = native.useMemo(() => {
+                        const models = new Map();
+                        for (const [slug, model] of Object.entries(
+                            props.models?.modelConfigBySlug ?? {},
+                        )) {
+                            models.set(slug, {
+                                slug,
+                                title: model.title ?? slug,
+                                thinkingEfforts: (
+                                    model.thinkingEfforts ?? []
+                                ).map((effort) => effort.thinking_effort),
+                            });
+                        }
+                        for (const option of modelOptions(props.models)) {
+                            let model = models.get(option.slug);
+                            if (!model) {
+                                model = {
+                                    slug: option.slug,
+                                    title:
+                                        option.modelTitle ??
+                                        option.title ??
+                                        option.slug,
+                                    thinkingEfforts: [],
+                                };
+                                models.set(option.slug, model);
+                            }
+                            if (
+                                option.thinkingEffort != null &&
+                                !model.thinkingEfforts.includes(
+                                    option.thinkingEffort,
+                                )
+                            )
+                                model.thinkingEfforts.push(
+                                    option.thinkingEffort,
+                                );
+                        }
+                        return [...models.values()];
+                    }, [props.models]);
+                    useControl(scope, {
+                        kind: "chat",
+                        active: true,
+                        conversationId: props.conversationId,
+                        selectedModel: props.selectedModel,
+                        isWorkConversation: props.isTppConversation,
+                        catalog: props.models,
+                        models,
+                        loading: Boolean(props.isLoading),
+                        sourceError: props.isError ? "모델 목록 불러오기 실패" : null,
+                        onModelChange: props.onModelChange,
+                        onThinkingEffortChange: props.onThinkingEffortChange,
+                    });
+                    return native.createElement(fn, props);
+                };
+            },
+            dotPicker(fn) {
+                return function (props) {
+                    const scope = native.useScope(native.routeScope);
+                    const conversationId = props.conversationId ?? null;
+                    const active = props.active && conversationId !== null;
+                    const hostId = native.useValue(
+                        native.threadHost,
+                        conversationId,
                     );
-                    const route = scope.getOwnValue(native.routeScope);
-                    const control = native.useRef({}).current;
-                    native.useLayoutEffect(() => {
-                        if (
-                            control.route !== route ||
-                            control.conversationId !== props.conversationId
-                        )
-                            control.error = null;
-                        Object.assign(control, {
-                            scope,
-                            route,
-                            kind,
-                            active:
-                                kind !== "dot" ||
-                                (props.active && props.conversationId != null),
-                            conversationId: props.conversationId,
-                            selectedModel: props.selectedModel,
-                            isWorkConversation: props.isTppConversation,
-                            onModelChange: props.onModelChange,
-                        });
-                        controls.add(control);
-                        scheduleState();
-                        return () => {
-                            controls.delete(control);
-                            scheduleState();
-                        };
-                    }, [
-                        control,
-                        scope,
-                        route,
-                        props.selectedModel,
-                        props.isTppConversation,
-                        props.active,
-                        props.conversationId,
-                        props.onModelChange,
-                    ]);
+                    const key = native.useMemo(
+                        () =>
+                            active
+                                ? { hostId, threadId: conversationId }
+                                : null,
+                        [active, hostId, conversationId],
+                    );
+                    const settings = native.useValue(
+                        native.threadSettings,
+                        key,
+                    );
+                    const model = settings?.model?.trim() || null;
+                    const additionalModels = native.useMemo(
+                        () => new Set(model ? [model] : []),
+                        [model],
+                    );
+                    const catalog = native.useThreadModels({
+                        hostId,
+                        enabled: active,
+                        additionalAvailableModels: additionalModels,
+                    });
+                    const models = native.useMemo(
+                        () =>
+                            (catalog.data?.models ?? []).map((model) => ({
+                                slug: model.model,
+                                title: model.displayName,
+                                thinkingEfforts:
+                                    model.supportedReasoningEfforts.map(
+                                        (effort) => effort.reasoningEffort,
+                                    ),
+                            })),
+                        [catalog.data],
+                    );
+                    useControl(scope, {
+                        kind: "dot",
+                        active,
+                        conversationId,
+                        hostId,
+                        selectedModel: {
+                            slug: model,
+                            thinkingEffort: settings?.reasoningEffort,
+                        },
+                        models,
+                        loading: catalog.isPending,
+                        sourceError: catalog.error
+                            ? String(catalog.error)
+                            : null,
+                    });
                     return native.createElement(fn, props);
                 };
             },
@@ -744,6 +838,104 @@
                 return after(fn, (_, controller) => {
                     dotControllers.set(controller.roomId, controller);
                 });
+            },
+            dotMessage(fn) {
+                return function (props) {
+                    dotMessageContext ??= native.createContext(null);
+                    return native.createElement(
+                        dotMessageContext.Provider,
+                        { value: props.message },
+                        native.createElement(fn, props),
+                    );
+                };
+            },
+            dotActions(fn) {
+                function CopyMessage({ message }) {
+                    const button = native.useRef(null);
+                    const messageRef = native.useRef(message);
+                    native.useLayoutEffect(() => {
+                        messageRef.current = message;
+                    }, [message]);
+                    const sprite = document
+                        .querySelector('svg use[href*="/cdn/assets/icons-"]')
+                        ?.getAttribute("href")
+                        ?.split("#")[0];
+                    native.useLayoutEffect(() => {
+                        if (!button.current || !sprite) return;
+                        return bindChatgptCopyButton(
+                            button.current,
+                            () => {
+                                const text = messageRef.current.text;
+                                if (!text)
+                                    throw new Error("메시지에 복사할 본문이 없습니다.");
+                                return text;
+                            },
+                            sprite,
+                            "메시지 복사",
+                        );
+                    }, [message.id, message.roomId, sprite]);
+                    return native.createElement(
+                        "button",
+                        {
+                            ref: button,
+                            type: "button",
+                            "aria-label": "메시지 복사",
+                            title: "메시지 복사",
+                            className:
+                                "button ghost icon-button message-action-button checker-next-dot-copy-message",
+                        },
+                        native.createElement(
+                            "svg",
+                            {
+                                "aria-hidden": true,
+                                width: 16,
+                                height: 16,
+                                viewBox: "0 0 16 16",
+                            },
+                            native.createElement("use", {
+                                href: `${sprite}#square-on-square-light-16`,
+                                fill: "currentColor",
+                            }),
+                        ),
+                    );
+                }
+                return function (props) {
+                    const message = native.useContext(dotMessageContext);
+                    const actions = fn(props);
+                    if (!message) return actions;
+                    const copy = native.createElement(CopyMessage, {
+                        key: "checker-next-copy",
+                        message,
+                    });
+                    return native.cloneElement(
+                        actions,
+                        {},
+                        ...(message.self
+                            ? [copy, ...actions.props.children]
+                            : [...actions.props.children, copy]),
+                    );
+                };
+            },
+            analysis(fn) {
+                return function (props) {
+                    const enabled = native.useSyncExternalStore(
+                        subscribeAutoCollapse,
+                        getAutoCollapse,
+                        getAutoCollapse,
+                    );
+                    return native.createElement(
+                        fn,
+                        enabled
+                            ? {
+                                  ...props,
+                                  allowCollapseBeforeFinal: true,
+                                  preventAutoCollapse: false,
+                                  forceExpanded: false,
+                                  disableCollapse: false,
+                              }
+                            : props,
+                    );
+                };
             },
             dotConversation(roomId) {
                 const controller = dotControllers.get(roomId);
@@ -762,14 +954,17 @@
                         id: props.conversationId,
                         serverId: props.browserConversationId,
                         copyReady: props.renderedTurns.length > 0,
-                        turns: props.isReadOnly
-                            ? props.renderedTurns
-                            : undefined,
-                        readOnly: props.isReadOnly,
+                        turns:
+                            props.isReadOnly || props.isTemporaryChat
+                                ? props.renderedTurns
+                                : undefined,
                     };
                     conversations.set(conversation.id, conversation);
                     if (conversation.serverId)
                         conversations.set(conversation.serverId, conversation);
+                    const temporaryId = props.isTemporaryChat && routeId();
+                    if (temporaryId)
+                        conversations.set(temporaryId, conversation);
                     scheduleState();
                 });
             },
@@ -1100,9 +1295,10 @@
             refreshAccounts() {
                 return appScope?.queryClient.invalidateQueries(
                     {
-                        queryKey: ["accounts"],
-                        predicate: ({ queryKey }) =>
-                            ["check", "full"].includes(queryKey[1]),
+                        predicate: ({ queryKey: [category, key] }) =>
+                            (category === "accounts" && key === "check") ||
+                            (category === "usage-settings" &&
+                                key === "accounts-check"),
                     },
                     { throwOnError: true },
                 );
@@ -1111,7 +1307,7 @@
                 const conversation = current();
                 const scope = appScope;
                 if (!conversation) throw new Error("현재 대화가 아직 로드되지 않음");
-                if (!scope && (includeDetails || !conversation.readOnly))
+                if (!scope && (includeDetails || !conversation.turns))
                     throw new Error("현재 대화 상태가 아직 로드되지 않음");
                 if (includeDetails) {
                     const messages = native.messages({
@@ -1138,9 +1334,10 @@
                     }
                     return turns;
                 }
-                return conversation.readOnly
-                    ? conversation.turns
-                    : scope.get(native.turns, conversation.id);
+                return (
+                    conversation.turns ??
+                    scope.get(native.turns, conversation.id)
+                );
             },
             getMessageText(item) {
                 if (item.source) {
@@ -1240,42 +1437,26 @@
             "checker-next-runtime-model-set",
             async (event) => {
                 const active = activeControl();
-                const target = thread;
+                const conversationId = active?.conversationId;
                 try {
                     const detail = event.detail;
                     if (active) active.error = null;
                     scheduleState();
                     if (!active) throw new Error("현재 페이지의 모델 컨트롤이 아직 로드되지 않음");
                     if (active.kind === "dot") {
-                        const state = thread;
-                        if (!state?.model)
-                            throw new Error("현재 스레드의 모델 설정이 아직 로드되지 않음");
-                        const selected = state.requested ?? state.model;
-                        const model = detail.model ?? selected.slug;
-                        const thinkingEffort = Object.hasOwn(
-                            detail,
-                            "thinkingEffort",
-                        )
-                            ? detail.thinkingEffort
-                            : detail.model
-                              ? (state.models.find(
-                                    (item) => item.slug === model,
-                                )?.defaultThinkingEffort ?? null)
-                              : selected.thinkingEffort;
-                        const requested = { slug: model, thinkingEffort };
-                        state.requested = requested;
-                        try {
-                            const applied =
-                                await state.manager.updateThreadSettingsForNextTurn(
-                                    state.conversationId,
-                                    { model, effort: thinkingEffort },
-                                );
-                            if (!applied) throw new Error("스레드 모델 설정이 적용되지 않음");
-                            await state.read();
-                        } finally {
-                            if (state.requested === requested)
-                                state.requested = undefined;
-                        }
+                        const settings = {};
+                        if (typeof detail.model === "string" && detail.model)
+                            settings.model = detail.model;
+                        if (Object.hasOwn(detail, "thinkingEffort"))
+                            settings.effort = detail.thinkingEffort;
+                        if (Object.keys(settings).length === 0) return;
+                        const applied = await native
+                            .threadClient(active.scope, active.hostId)
+                            .updateThreadSettingsForNextTurn(
+                                active.conversationId,
+                                settings,
+                            );
+                        if (!applied) throw new Error("스레드 모델 설정이 적용되지 않음");
                         return;
                     }
                     if (detail.origin === "chat" || detail.origin === "work") {
@@ -1305,10 +1486,23 @@
                     }
                     let model;
                     if (typeof detail.model === "string" && detail.model) {
-                        model = {
+                        const option = native.resolveModel(active.catalog, {
                             slug: detail.model,
                             thinkingEffort: null,
-                            versionId: null,
+                        });
+                        model = {
+                            slug: detail.model,
+                            thinkingEffort:
+                                active.catalog
+                                    ?.defaultThinkingEffortByModelSlug?.[
+                                    detail.model
+                                ] ??
+                                option?.thinkingEffort ??
+                                null,
+                            versionId: native.modelVersion(
+                                active.catalog,
+                                detail.model,
+                            ),
                         };
                     }
                     if (Object.hasOwn(detail, "thinkingEffort")) {
@@ -1342,7 +1536,15 @@
                                 },
                             );
                         }
-                        await active.onModelChange(model);
+                        if (
+                            !detail.model &&
+                            Object.hasOwn(detail, "thinkingEffort") &&
+                            active.onThinkingEffortChange
+                        )
+                            await active.onThinkingEffortChange(
+                                detail.thinkingEffort,
+                            );
+                        else await active.onModelChange(model);
                     }
                     scheduleState();
                 } catch (error) {
@@ -1350,7 +1552,7 @@
                     if (
                         active &&
                         activeControl() === active &&
-                        (active.kind !== "dot" || thread === target)
+                        active.conversationId === conversationId
                     ) {
                         active.error = String(error);
                         scheduleState();
@@ -1487,6 +1689,15 @@
                         source.includes(".watch="),
                 );
                 bindings.useScope = [scopes.id, useScope.exportName];
+                const useValue = exported(
+                    scopes,
+                    "상태 구독 인터페이스",
+                    (source) =>
+                        source.includes("cacheKey") &&
+                        source.includes(".enabled") &&
+                        source.includes("useLayoutEffect"),
+                );
+                bindings.useValue = [scopes.id, useValue.exportName];
                 const react = single(
                     [
                         ...useScope
@@ -1497,7 +1708,184 @@
                 )[1];
                 append(
                     scopes,
-                    `${api}.register({useRef:${react}.useRef,useLayoutEffect:${react}.useLayoutEffect,createElement:${react}.createElement});${useScope.name}=${api}.scope(${useScope.name});`,
+                    `${api}.register({useMemo:${react}.useMemo,useRef:${react}.useRef,useLayoutEffect:${react}.useLayoutEffect,createElement:${react}.createElement,createContext:${react}.createContext,useContext:${react}.useContext,cloneElement:${react}.cloneElement,useSyncExternalStore:${react}.useSyncExternalStore});${useScope.name}=${api}.scope(${useScope.name});`,
+                );
+            },
+        );
+
+        module(
+            "사이드바 탐색 컴포넌트 모듈",
+            (source) =>
+                source.includes("sidebar.navItem.unread") &&
+                source.includes("excludeFromNavigation:"),
+            (navigation) => {
+                const item = exported(navigation, "사이드바 탐색 항목", (source) =>
+                    source.includes("sidebar.navItem.unread"),
+                );
+                append(
+                    navigation,
+                    `${item.name}=${api}.sidebarNav(${item.name});`,
+                );
+            },
+        );
+
+        module(
+            "사이드바 행 컴포넌트 모듈",
+            (source) =>
+                source.includes("hasNavigationLink:") &&
+                source.includes("data-sidebar-cycle-item"),
+            (row) => {
+                const render = exported(row, "사이드바 행", (source) =>
+                    source.includes("hasNavigationLink:"),
+                );
+                append(
+                    row,
+                    `${render.name}=${api}.sidebarRow(${render.name});`,
+                );
+            },
+        );
+
+        const sidebarButton = /let ([\w$]+)=[\w$]+=>\{let\{type:/;
+        module(
+            "사이드바 버튼 링크 모듈",
+            (source) =>
+                sidebarButton.test(source) && source.includes('"data-uniform"'),
+            (button) => {
+                const name = button.source.match(sidebarButton)[1];
+                append(button, `${name}=${api}.sidebarButton(${name});`);
+            },
+        );
+
+        module(
+            "사이드바 라우팅 모듈",
+            (source) =>
+                source.includes("destinationId:") &&
+                source.includes('rail:"fixed"') &&
+                source.includes("routeKind"),
+            (routes) => {
+                const [exportName] = single(
+                    Object.entries(
+                        getChatgptModuleExports(routes.source),
+                    ).filter(
+                        ([, name]) =>
+                            !routes.source.includes(`function ${name}(`),
+                    ),
+                    "사이드바 라우팅 테이블",
+                );
+                bindings.sidebarRoutes = [routes.id, exportName];
+            },
+        );
+
+        for (const [name, label, predicate, resolve] of [
+            [
+                "dotHref",
+                "Dot 이동 주소",
+                (source) =>
+                    source.includes('"/dots"') && source.includes("orbitId"),
+                (source) =>
+                    source.includes("encodeURIComponent") &&
+                    !source.includes("/thread/"),
+            ],
+            [
+                "projectHref",
+                "프로젝트 이동 주소",
+                (source) => source.includes('"/g/:projectId/project"'),
+                (source) => source.includes("}/project`"),
+            ],
+            [
+                "libraryHref",
+                "라이브러리 이동 주소",
+                (source) => source.includes("library-display-preferences:"),
+                (source) =>
+                    source.includes('"/library"') &&
+                    source.includes(".lastTab"),
+            ],
+        ]) {
+            module(label, predicate, (routes) => {
+                const href = exported(routes, label, resolve);
+                bindings[name] = [routes.id, href.exportName];
+            });
+        }
+
+        for (const [label, marker] of [
+            ["사이드바 탐색 진입점 모듈", 'animatedIcon:"sidebar-new-chat"'],
+            ["사이드바 아이콘 진입점 모듈", "data-slate-sidebar-peek-area"],
+        ]) {
+            module(
+                label,
+                (source) =>
+                    source.includes(marker) &&
+                    source.includes("data-sidebar-destination"),
+                (navigation) => {
+                    navigation.source = navigation.source.replaceAll(
+                        /"data-sidebar-destination":([\w$]+)\.id/g,
+                        '"data-checker-next-href":$1.href,$&',
+                    );
+                },
+            );
+        }
+
+        module(
+            "새 채팅 이동 버튼 모듈",
+            (source) =>
+                source.includes("newChatMessage:") &&
+                source.includes("disabled:") &&
+                source.includes("staticIcon:"),
+            (button) => {
+                const [, start] = single(
+                    [...button.source.matchAll(/onStartChat:([\w$]+)/g)],
+                    "새 채팅 동작",
+                );
+                replace(
+                    button,
+                    `onClick:${start}`,
+                    `"data-checker-next-href":"/",onClick:${start}`,
+                );
+            },
+        );
+
+        const projectRow = /projectId:([\w$]+),actions:[\w$]+/g;
+        module(
+            "프로젝트 사이드바 링크 모듈",
+            (source) =>
+                source.includes("onOpenProject:") &&
+                source.includes("excludePinnedConversations:") &&
+                /projectId:[\w$]+,actions:[\w$]+/.test(source),
+            (project) => {
+                const row = single(
+                    [...project.source.matchAll(projectRow)],
+                    "프로젝트 사이드바 행",
+                );
+                replace(
+                    project,
+                    row[0],
+                    `"data-checker-next-href":${api}.projectHref(${row[1]}),${row[0]}`,
+                );
+            },
+        );
+
+        module(
+            "사이드바 기능 진입점 모듈",
+            (source) =>
+                source.includes('animatedIcon:"sidebar-images"') &&
+                source.includes('animatedIcon:"sidebar-library"'),
+            (features) => {
+                features.source = features.source.replaceAll(
+                    /onSelect:(?:\(\)|[\w$]+)=>\{(?:[\w$]+\(\),)?[\w$]+\(("[^"\\]+"|[\w$]+\.[\w$]+)(?=[,)])/g,
+                    "href:$1,$&",
+                );
+                features.source = features.source.replaceAll(
+                    /onSelect:([\w$]+)=>\{\(0,[\w$]+\.[\w$]+\)\(([\w$]+),[\w$]+,\1\)\},onRestore:\(\)=>\(0,[\w$]+\.[\w$]+\)\(\2,"(library|sites)"\),isCurrentDestination:[\w$]+\.startsWith\(("[^"]+")\)/g,
+                    (match, argument, scope, destination, path) =>
+                        `href:${destination === "library" ? `${api}.libraryHref(${scope})` : path},${match}`,
+                );
+                features.source = features.source.replaceAll(
+                    /onSelect:[\w$]+=>\{let [\w$]+=\(\)=>\{\(0,[\w$]+\.[\w$]+\)\([\w$]+,[\w$]+,([\w$]+),[\w$]+\.CodexPluginDirectoryEntrypoint\./g,
+                    'href:$1?"/plugins":"/skills",$&',
+                );
+                features.source = features.source.replaceAll(
+                    /onSelect:([\w$]+)=>\{[\w$]+\?[\w$]+\(([\w$]+\.[\w$]+),\{state:\1\}\):[\w$]+\.set\(/g,
+                    "href:$2,$&",
                 );
             },
         );
@@ -1543,7 +1931,9 @@
             (source) =>
                 source.includes(
                     "historyAnchor:void 0,newerLoading:!1,messages:[]",
-                ) && source.includes("services:{renderMessageFooter:"),
+                ) &&
+                source.includes("services:{") &&
+                source.includes("renderMessageFooter:"),
             (messages) => {
                 const create = single(
                     [
@@ -1554,6 +1944,56 @@
                     "Dots 메시지 컨트롤러",
                 )[1];
                 append(messages, `${create}=${api}.dotController(${create});`);
+            },
+        );
+
+        module(
+            "Dots 메시지 컴포넌트 모듈",
+            (source) =>
+                source.includes("message-inline-actions--orbit") &&
+                source.includes("className:`message-row ${"),
+            (messages) => {
+                const renderMessage = single(
+                    [
+                        ...messages.source.matchAll(
+                            /function ([\w$]+)\(e\)\{(?:(?!function [\w$]+\()[\s\S])*?className:`message-row \$\{/g,
+                        ),
+                    ],
+                    "Dots 메시지 행",
+                )[1];
+                const actions = single(
+                    [
+                        ...messages.source.matchAll(
+                            /function ([\w$]+)\(e\)\{(?:(?!function [\w$]+\()[\s\S])*?`message-inline-actions\$\{/g,
+                        ),
+                    ],
+                    "Dots 메시지 액션 바",
+                )[1];
+                append(
+                    messages,
+                    `${renderMessage}=${api}.dotMessage(${renderMessage});${actions}=${api}.dotActions(${actions});`,
+                );
+            },
+        );
+
+        module(
+            "분석 내용 모듈",
+            (source) =>
+                source.includes("allowCollapseBeforeFinal:") &&
+                source.includes("preventAutoCollapse:") &&
+                source.includes("agentActivityProps:"),
+            (analysis) => {
+                const activity = exported(
+                    analysis,
+                    "분석 내용 컴포넌트",
+                    (source) =>
+                        source.includes("allowCollapseBeforeFinal:") &&
+                        source.includes("persistedCollapsed:"),
+                );
+                append(
+                    analysis,
+                    `${activity.name}=${api}.analysis(${activity.name});`,
+                );
             },
         );
 
@@ -1818,20 +2258,71 @@
             );
         }
 
-        const threadManager =
-            /function ([\w$]+)\(e,t\)\{if\(null==t\)return null;[^{}]*\.getConversation\(t\)\)\?\?null\}/;
+        const threadSettings =
+            /[\w$]+=\(0,[\w$]+\.[\w$]+\)\("modelSettings"\),([\w$]+)=/;
         module(
-            "작업 관리 모듈",
-            (source) => threadManager.test(source),
-            (manager) => {
-                const symbol = manager.source.match(threadManager)[1];
-                const [exportName] = single(
-                    Object.entries(
-                        getChatgptModuleExports(manager.source),
-                    ).filter(([, value]) => value === symbol),
-                    "작업 관리 인터페이스",
+            "작업 모델 상태 모듈",
+            (source) => threadSettings.test(source),
+            (state) => {
+                const settings = state.source.match(threadSettings)[1];
+                const host = single(
+                    [
+                        ...state.source.matchAll(
+                            /function [\w$]+\(e,t\)\{return [\w$]+\(e,t\)\?\.getHostId\(\)\?\?e\.get\(([\w$]+),t\)\}/g,
+                        ),
+                    ],
+                    "작업 호스트 상태",
+                )[1];
+                const exports = Object.entries(
+                    getChatgptModuleExports(state.source),
                 );
-                bindings.threadManager = [manager.id, exportName];
+                for (const [name, symbol] of [
+                    ["threadHost", host],
+                    ["threadSettings", settings],
+                ]) {
+                    const [exportName] = single(
+                        exports.filter(([, value]) => value === symbol),
+                        `${name} 네이티브 내보내기`,
+                    );
+                    bindings[name] = [state.id, exportName];
+                }
+            },
+        );
+
+        module(
+            "작업 클라이언트 모듈",
+            (source) =>
+                source.includes(".forHost(") &&
+                source.includes(".rpc.dup()") &&
+                source.includes(".onRpcBroken("),
+            (client) => {
+                const access = exported(
+                    client,
+                    "작업 클라이언트 인터페이스",
+                    (source) =>
+                        source.includes(".forHost(") &&
+                        source.includes(".rpc.dup()"),
+                );
+                bindings.threadClient = [client.id, access.exportName];
+            },
+        );
+
+        module(
+            "작업 모델 카탈로그 모듈",
+            (source) =>
+                source.includes('"models","list"') &&
+                source.includes("modelCatalogPath:") &&
+                source.includes("additionalAvailableModels:"),
+            (models) => {
+                const useModels = exported(
+                    models,
+                    "작업 모델 카탈로그 인터페이스",
+                    (source) =>
+                        source.includes("model_catalog_json") &&
+                        source.includes("additionalAvailableModels") &&
+                        source.includes("model_provider"),
+                );
+                bindings.useThreadModels = [models.id, useModels.exportName];
             },
         );
 
@@ -1846,26 +2337,21 @@
                 );
                 append(
                     dot,
-                    `${renderDot.name}=${api}.picker(${renderDot.name},"dot");`,
+                    `${renderDot.name}=${api}.dotPicker(${renderDot.name});`,
                 );
             },
         );
 
+        const conversationOrigin =
+            /function [\w$]+\([\w$]+,[\w$]+,([\w$]+)\)\{[^{}]*\{[^{}]*conversationOrigin:\1\?\?null\}/;
         module(
             "대화 상태 모듈",
-            (source) =>
-                source.includes("conversationOrigin:") &&
-                source.includes("asyncStatus:") &&
-                source.includes("currentNode:") &&
-                source.includes("serverConversationId:"),
+            (source) => conversationOrigin.test(source),
             (conversation) => {
                 const setOrigin = exported(
                     conversation,
                     "대화 모드 인터페이스",
-                    (source) =>
-                        /^function [\w$]+\([\w$]+,[\w$]+,[\w$]+\)\{/.test(
-                            source,
-                        ) && /conversationOrigin:[\w$]+\?\?null/.test(source),
+                    (source) => conversationOrigin.test(source),
                 );
                 bindings.setOrigin = [conversation.id, setOrigin.exportName];
             },
@@ -1937,7 +2423,7 @@
                     "홈 모드 파싱 인터페이스",
                     (source) =>
                         source.includes("persistedMode:") &&
-                        source.includes('return"extension"'),
+                        source.includes("workOnlyModeEnabled:"),
                 );
                 const parameter = single(
                     [
@@ -1980,6 +2466,23 @@
                     models,
                     `${parseModels.name}=${api}.models(${parseModels.name});`,
                 );
+                const resolveModel = exported(
+                    models,
+                    "모델 옵션 파싱 인터페이스",
+                    (source) =>
+                        /^function [\w$]+\([\w$]+,[\w$]+\)\{/.test(source) &&
+                        source.includes("defaultThinkingEffortByModelSlug") &&
+                        source.includes("internalOptions"),
+                );
+                const modelVersion = exported(
+                    models,
+                    "모델 버전 파싱 인터페이스",
+                    (source) =>
+                        source.includes("versionOptions?.find") &&
+                        source.includes(".slugs.includes("),
+                );
+                bindings.resolveModel = [models.id, resolveModel.exportName];
+                bindings.modelVersion = [models.id, modelVersion.exportName];
             },
         );
 
@@ -2195,21 +2698,22 @@
         module(
             "전체 계정 모듈",
             (source) =>
-                source.includes('queryKey:["accounts","full",') &&
-                source.includes('"/accounts/check/{version}"'),
+                source.includes(
+                    "Account check is missing membership metadata",
+                ) && source.includes('"/accounts/check/{version}"'),
             (fullAccounts) => {
-                const accountQuery = single(
+                const result = single(
                     [
                         ...fullAccounts.source.matchAll(
-                            /queryFn:(async [\w$]+=>\{[\s\S]*?\})(?=,staleTime:)/g,
+                            /return ([\w$]+)\?\.\(([\w$]+)\),\2\b/g,
                         ),
                     ],
-                    "전체 계정 조회 인터페이스",
+                    "전체 계정 조회 결과",
                 );
                 replace(
                     fullAccounts,
-                    accountQuery[1],
-                    `async (...args)=>{const result=await (${accountQuery[1]})(...args),plan=${fakePlan};return plan?{...result,accounts:Object.fromEntries(Object.entries(result.accounts).map(([id,entry])=>[id,{...entry,account:{...entry.account,plan_type:plan}}]))}:result}`,
+                    result[0],
+                    `return ${result[1]}?.(${result[2]}),((result,plan)=>plan?{...result,accounts:Object.fromEntries(Object.entries(result.accounts).map(([id,entry])=>[id,{...entry,account:{...entry.account,plan_type:plan}}]))}:result)(${result[2]},${fakePlan})`,
                 );
             },
         );
@@ -2267,6 +2771,7 @@
         if (chatgptCopyButtonEnabled) items.push("전체 대화 복사");
         if (chatgptMessageInfoEnabled) items.push("시간 및 모델 표시");
         if (chatgptApprovalEnabled) items.push("도구 요청 자동 승인");
+        if (chatgptAutoCollapseEnabled) items.push("분석 내용 자동 접기");
         if (chatgptFakePlanEnabled)
             items.push(`플랜 표시:${chatgptFakePlanValue}`);
         return items;
@@ -2337,44 +2842,6 @@
         isChatgptMode &&
         localStorage.getItem(CHATGPT_FAKE_PLAN_ENABLED_KEY) === "true";
 
-    function updateChatgptRuntimeModelCatalog(origin, data) {
-        if (!isChatgptMode || (origin !== "chat" && origin !== "work")) return;
-        if (!Array.isArray(data?.models)) {
-            reportChatgptFailure(`ChatGPT ${origin} 모델 목록 형식이 올바르지 않습니다.`);
-        }
-        chatgptRuntimeModelCatalogs[origin] = Array.isArray(data?.models)
-            ? data.models.flatMap((model) => {
-                  if (typeof model?.slug !== "string" || !model.slug.trim()) {
-                      return [];
-                  }
-                  return [
-                      {
-                          slug: model.slug.trim(),
-                          title:
-                              typeof model.title === "string" &&
-                              model.title.trim()
-                                  ? model.title.trim()
-                                  : model.slug.trim(),
-                          thinkingEfforts: Array.isArray(model.thinking_efforts)
-                              ? model.thinking_efforts
-                                    .map((effort) =>
-                                        typeof effort === "string"
-                                            ? effort
-                                            : effort?.thinking_effort,
-                                    )
-                                    .filter(
-                                        (effort) =>
-                                            typeof effort === "string" &&
-                                            effort.trim(),
-                                    )
-                              : [],
-                      },
-                  ];
-              })
-            : [];
-        updateChatgptRuntimeModelOptions();
-    }
-
     function updateChatgptRuntimeModelOptions(
         selectedModelValue = undefined,
         selectedThinkingValue = undefined,
@@ -2412,12 +2879,14 @@
             option.textContent = text;
             return option;
         };
-        const models =
-            originSelect.value === "dot"
-                ? (chatgptRuntimeModelState?.models ?? [])
-                : (chatgptRuntimeModelCatalogs[originSelect.value] ?? []);
+        const state = chatgptRuntimeModelState;
+        const models = originSelect.value === state?.origin ? state.models : [];
         const createPlaceholder = (
-            text = chatgptRuntimeModelState?.available ? "기본값" : "불러오는 중…",
+            text = !state || state.loading
+                ? "불러오는 중…"
+                : state.origin === "dot"
+                  ? "Dot 기본값"
+                  : "기본값",
         ) => {
             const option = createOption("", text);
             option.disabled = true;
@@ -2444,9 +2913,14 @@
         modelSelect.value = modelValue;
 
         const selectedModel = models.find((model) => model.slug === modelValue);
-        const efforts = [...new Set(selectedModel?.thinkingEfforts || [])].map(
-            String,
-        );
+        const efforts = [
+            ...new Set(
+                selectedModel?.thinkingEfforts ??
+                    (state?.origin === "dot" && !modelValue
+                        ? models.flatMap((model) => model.thinkingEfforts)
+                        : []),
+            ),
+        ].map(String);
         const thinkingOptions = chatgptRuntimeModelState?.available
             ? [createOption("", "지정 안 함")]
             : [createPlaceholder()];
@@ -2543,13 +3017,9 @@
 
         let modelValue = pageChanged ? "" : undefined;
         let thinkingValue = pageChanged ? "" : undefined;
-        if (state?.available) {
-            if (
-                (pageChanged || document.activeElement !== modelSelect) &&
-                typeof state.model === "string"
-            ) {
-                modelValue = state.model;
-            }
+        if (state) {
+            if (pageChanged || document.activeElement !== modelSelect)
+                modelValue = state.model ?? "";
             if (pageChanged || document.activeElement !== thinkingSelect) {
                 thinkingValue =
                     typeof state.thinkingEffort === "string"
@@ -2686,7 +3156,8 @@
     ) {
         setChatgptCopyButtonState(button, "idle", sprite, label);
         let copying = false;
-        button.addEventListener("click", async (event) => {
+        let resetTimer;
+        const onClick = async (event) => {
             event.stopPropagation();
             if (copying) return;
             copying = true;
@@ -2700,66 +3171,31 @@
             } finally {
                 copying = false;
             }
-            setTimeout(
+            resetTimer = setTimeout(
                 () => setChatgptCopyButtonState(button, "idle", sprite, label),
                 1000,
             );
-        });
+        };
+        button.addEventListener("click", onClick);
+        return () => {
+            button.removeEventListener("click", onClick);
+            clearTimeout(resetTimer);
+        };
     }
 
-    function syncDotCopyButtons() {
+    function syncDotCopyButton() {
         const existing = document.getElementById(
             "checker-next-copy-conversation-button",
         );
         if (!chatgptCopyButtonEnabled || !chatgptModuleInjectionStarted) {
             existing?.remove();
-            for (const button of document.querySelectorAll(
-                ".checker-next-dot-copy-message",
-            ))
-                button.remove();
             return;
         }
 
-        const articles = document.querySelectorAll(
-            "article.message-row[data-message-id]",
-        );
-        for (const article of articles) {
-            const reply = article.querySelector(
-                '.message-inline-actions button[data-action="reply"]',
-            );
-            if (
-                !reply ||
-                article.querySelector(".checker-next-dot-copy-message")
-            )
-                continue;
-            const sprite = reply
-                .querySelector("svg use")
-                ?.getAttribute("href")
-                ?.split("#")[0];
-            if (!sprite) continue;
-            const button = reply.cloneNode(true);
-            button.removeAttribute("data-action");
-            button.disabled = false;
-            button.classList.add("checker-next-dot-copy-message");
-            bindChatgptCopyButton(
-                button,
-                () => {
-                    const roomId = article.dataset.messageId.split("~")[0];
-                    const text = getDotConversation(roomId).messages.find(
-                        (message) => message.id === article.dataset.messageId,
-                    )?.text;
-                    if (!text) throw new Error("메시지에 복사할 본문이 없습니다.");
-                    return text;
-                },
-                sprite,
-                "메시지 복사",
-            );
-            if (article.classList.contains("self")) reply.before(button);
-            else reply.after(button);
-        }
-
         const pathname = pageWindow.location.pathname;
-        const roomId = articles[0]?.dataset.messageId?.split("~")[0];
+        const roomId = document
+            .querySelector("article.message-row[data-message-id]")
+            ?.dataset.messageId?.split("~")[0];
         if (
             existing?.dataset.pathname === pathname &&
             existing.dataset.roomId === roomId
@@ -2801,7 +3237,7 @@
     function syncChatgptCopyButton() {
         const pathname = pageWindow.location.pathname;
         if (/^\/dots\/[^/]+\/?$/.test(pathname)) {
-            syncDotCopyButtons();
+            syncDotCopyButton();
             return;
         }
         let existing = document.getElementById(
@@ -2845,7 +3281,7 @@
 
         const nativeButton = [
             ...document.querySelectorAll(
-                'header[data-app-shell-titlebar] button[aria-haspopup="menu"]',
+                'header[data-app-shell-titlebar] button[aria-haspopup="menu"], header[data-app-shell-titlebar] button:has(use[href$="#bookmark-light-16"])',
             ),
         ].findLast((button) => !button.closest('[aria-hidden="true"]'));
         const sprite = document
@@ -2882,7 +3318,12 @@
             },
             sprite,
         );
-        nativeButton.before(button);
+        if (nativeButton.querySelector('use[href$="#bookmark-light-16"]')) {
+            button.classList.add("pointer-events-auto");
+            nativeButton.closest(".pointer-events-auto.flex").before(button);
+        } else {
+            nativeButton.before(button);
+        }
     }
 
     // 全局状态：记录弹窗是否正在显示
@@ -3371,6 +3812,47 @@
                     "></span>
                 </label>
             </div>
+            <div id="chatgpt-auto-collapse-container" style="display: flex; align-items: center; justify-content: space-between;">
+                <span>분석 내용 자동 접기
+                <span id="chatgpt-auto-collapse-tooltip" style="
+                    cursor: pointer;
+                    color: #fff;
+                    font-size: 12px;
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    line-height: 14px;
+                    text-align: center;
+                    border-radius: 50%;
+                    border: 1px solid #fff;
+                    margin-left: 3px;
+                ">?</span></span>
+                <label style="position: relative; display: inline-block; width: 28px; height: 16px; cursor: pointer;">
+                    <input type="checkbox" id="chatgpt-auto-collapse-toggle" style="opacity: 0; width: 0; height: 0;">
+                    <span id="chatgpt-auto-collapse-slider" style="
+                        position: absolute;
+                        cursor: pointer;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-color: #555;
+                        transition: 0.3s;
+                        border-radius: 16px;
+                    "></span>
+                    <span id="chatgpt-auto-collapse-slider-dot" style="
+                        position: absolute;
+                        content: '';
+                        height: 10px;
+                        width: 10px;
+                        left: 3px;
+                        bottom: 3px;
+                        background-color: white;
+                        transition: 0.3s;
+                        border-radius: 50%;
+                    "></span>
+                </label>
+            </div>
             <div id="chatgpt-selection-popover-container" style="display: flex; align-items: center; justify-content: space-between;">
                 <span>텍스트 선택 팝오버 비활성화
                 <span id="chatgpt-selection-popover-tooltip" style="
@@ -3755,6 +4237,11 @@
             "각 도구 요청에서 자동으로 허용을 선택합니다.",
         );
 
+        const chatgptAutoCollapseTooltipBox = createTooltip(
+            "chatgpt-auto-collapse-tooltip-box",
+            "분석 실행 내용을 기본적으로 접습니다.",
+        );
+
         const chatgptSelectionPopoverTooltipBox = createTooltip(
             "chatgpt-selection-popover-tooltip-box",
             "텍스트 선택 및 편집 시 표시되는 팝오버 메뉴를 숨깁니다.",
@@ -3830,6 +4317,10 @@
                 chatgptApprovalTooltipBox,
             );
             bindTooltipEvents(
+                "chatgpt-auto-collapse-tooltip",
+                chatgptAutoCollapseTooltipBox,
+            );
+            bindTooltipEvents(
                 "chatgpt-selection-popover-tooltip",
                 chatgptSelectionPopoverTooltipBox,
             );
@@ -3882,6 +4373,9 @@
             updateChatgptCopyButtonToggle();
             toggle.addEventListener("change", () => {
                 chatgptCopyButtonEnabled = toggle.checked;
+                chatgptDotCopyStyle.media = chatgptCopyButtonEnabled
+                    ? "not all"
+                    : "all";
                 localStorage.setItem(
                     CHATGPT_COPY_BUTTON_ENABLED_KEY,
                     String(chatgptCopyButtonEnabled),
@@ -3928,6 +4422,10 @@
                 select.addEventListener("focus", () => {
                     previousValue = select.value;
                 });
+                select.addEventListener(
+                    "blur",
+                    updateChatgptRuntimeModelControls,
+                );
                 select.addEventListener("change", () => {
                     if (select.value === CHATGPT_RUNTIME_CUSTOM_VALUE) {
                         const value = pageWindow
@@ -3964,7 +4462,6 @@
                 apply({ origin: originSelect.value });
             });
             bindCustomOption(modelSelect, "모델 slug 입력", (model) => {
-                thinkingSelect.value = "";
                 updateChatgptRuntimeModelOptions();
                 if (model) apply({ model });
             });
@@ -4066,6 +4563,18 @@
                     chatgptApprovalEnabled = value;
                     pageWindow.dispatchEvent(
                         new pageWindow.Event(CHATGPT_APPROVAL_EVENT),
+                    );
+                    updateChatgptInjectionStatus();
+                },
+            );
+            bindToggle(
+                "chatgpt-auto-collapse",
+                chatgptAutoCollapseEnabled,
+                CHATGPT_AUTO_COLLAPSE_KEY,
+                (value) => {
+                    chatgptAutoCollapseEnabled = value;
+                    pageWindow.dispatchEvent(
+                        new pageWindow.Event(CHATGPT_AUTO_COLLAPSE_EVENT),
                     );
                     updateChatgptInjectionStatus();
                 },
@@ -4611,15 +5120,25 @@
 
     // 拦截 fetch 请求
     const originalFetch = pageWindow.fetch.bind(pageWindow);
-    pageWindow.fetch = async function (resource, options = {}) {
-        const requestUrl =
-            typeof resource === "string" ? resource : resource?.url || "";
-        const requestMethod =
-            typeof resource === "object" && resource.method
-                ? resource.method
-                : options?.method || "GET";
-        const finalMethod = requestMethod.toUpperCase();
+    pageWindow.fetch = async function (resource, options) {
         const response = await originalFetch(resource, options);
+        observeResponse(resource, options, response).catch((error) => {
+            console.error("[CheckerNext] 응답 정보 읽기 오류:", error);
+        });
+        return response;
+    };
+
+    async function observeResponse(resource, options, response) {
+        if (!response.ok) return;
+        const requestUrl = new URL(
+            resource?.url ?? resource,
+            pageWindow.location.href,
+        ).pathname;
+        const finalMethod = (
+            options?.method ??
+            resource?.method ??
+            "GET"
+        ).toUpperCase();
 
         if (
             (requestUrl.includes(
@@ -4628,11 +5147,10 @@
                 requestUrl.includes(
                     "/backend-anon/sentinel/chat-requirements/prepare",
                 )) &&
-            finalMethod === "POST" &&
-            response.ok
+            finalMethod === "POST"
         ) {
             if (!isChatgptMode) {
-                return response;
+                return;
             }
             try {
                 const data = await response.clone().json();
@@ -4644,23 +5162,19 @@
                 updatePersona(data.persona);
                 updateDifficultyIndicator(difficulty);
 
-                return response;
+                return;
             } catch (e) {
-                console.error("[CheckerNext] 응답 처리 또는 응답 재생성 중 오류:", e);
+                console.error("[CheckerNext] 챌린지 응답 처리 중 오류:", e);
                 const difficultyElement = document.getElementById("difficulty");
                 if (difficultyElement) difficultyElement.innerText = "...";
                 updateDifficultyIndicator("...");
-                return response;
+                return;
             }
         }
 
-        if (
-            requestUrl.endsWith("/backend-api/me") &&
-            finalMethod === "GET" &&
-            response.ok
-        ) {
+        if (requestUrl.endsWith("/backend-api/me") && finalMethod === "GET") {
             if (!isChatgptMode) {
-                return response;
+                return;
             }
             try {
                 const data = await response.clone().json();
@@ -4668,20 +5182,19 @@
                     typeof data?.country === "string" ? data.country : null,
                     typeof data?.region === "string" ? data.region : null,
                 );
-                return response;
+                return;
             } catch (e) {
                 console.error("[CheckerNext] 사용자 지역 응답 처리 중 오류:", e);
-                return response;
+                return;
             }
         }
 
         if (
             /\/backend-api\/accounts\/check\/[^/?#]+/.test(requestUrl) &&
-            finalMethod === "GET" &&
-            response.ok
+            finalMethod === "GET"
         ) {
             if (!isChatgptMode) {
-                return response;
+                return;
             }
             try {
                 const data = await response.clone().json();
@@ -4690,20 +5203,19 @@
                     (accountId && data?.accounts?.[accountId]) ||
                     data?.accounts?.default;
                 updateBillingCurrency(account?.entitlement?.billing_currency);
-                return response;
+                return;
             } catch (e) {
                 console.error("[CheckerNext] 결제 통화 응답 처리 중 오류:", e);
-                return response;
+                return;
             }
         }
 
         if (
             requestUrl.includes("/backend-api/memories") &&
-            finalMethod === "GET" &&
-            response.ok
+            finalMethod === "GET"
         ) {
             if (!isChatgptMode) {
-                return response;
+                return;
             }
             try {
                 const data = await response.clone().json();
@@ -4715,53 +5227,16 @@
                         ? data.memory_max_tokens
                         : null,
                 );
-                return response;
+                return;
             } catch (e) {
                 console.error("[CheckerNext] 메모리 사용량 응답 처리 중 오류:", e);
-                return response;
-            }
-        }
-
-        if (
-            /\/backend-api\/tpp\/models\/?(?:[?#]|$)/.test(requestUrl) &&
-            finalMethod === "GET" &&
-            response.ok
-        ) {
-            if (!isChatgptMode) return response;
-            try {
-                updateChatgptRuntimeModelCatalog(
-                    "work",
-                    await response.clone().json(),
-                );
-                return response;
-            } catch (e) {
-                console.error("[CheckerNext] Work 모델 응답 처리 중 오류:", e);
-                return response;
-            }
-        }
-
-        if (
-            /\/backend-api\/models\/?(?:[?#]|$)/.test(requestUrl) &&
-            finalMethod === "GET" &&
-            response.ok
-        ) {
-            if (!isChatgptMode) return response;
-            try {
-                updateChatgptRuntimeModelCatalog(
-                    "chat",
-                    await response.clone().json(),
-                );
-                return response;
-            } catch (e) {
-                console.error("[CheckerNext] Chat 모델 응답 처리 중 오류:", e);
-                return response;
+                return;
             }
         }
 
         if (
             requestUrl.includes("/backend-api/conversation/init") &&
-            finalMethod === "POST" &&
-            response.ok
+            finalMethod === "POST"
         ) {
             try {
                 const data = await response.clone().json();
@@ -4778,46 +5253,42 @@
                         }
                     }
                 }
-                return response;
+                return;
             } catch (e) {
                 console.error("[CheckerNext] 기능 사용량 응답 처리 중 오류:", e);
-                return response;
+                return;
             }
         }
 
         if (
-            /\/backend-api\/wham\/usage\/?(?:[?#]|$)/.test(requestUrl) &&
-            finalMethod === "GET" &&
-            response.ok
+            /\/backend-api\/wham\/usage\/?$/.test(requestUrl) &&
+            finalMethod === "GET"
         ) {
             try {
                 const data = await response.clone().json();
                 updateCodexInfo(getCodexUsageWindows(data));
                 updateCodexCredits(data?.credits);
                 updateCodexResetCredits(data?.rate_limit_reset_credits);
-                return response;
+                return;
             } catch (e) {
                 console.error("[CheckerNext] Codex 응답 처리 중 오류:", e);
-                return response;
+                return;
             }
         }
 
         if (
-            /\/backend-api\/wham\/rate-limit-reset-credits\/?(?:[?#]|$)/.test(
+            /\/backend-api\/wham\/rate-limit-reset-credits\/?$/.test(
                 requestUrl,
             ) &&
-            finalMethod === "GET" &&
-            response.ok
+            finalMethod === "GET"
         ) {
             try {
                 updateCodexResetCredits(await response.clone().json());
-                return response;
+                return;
             } catch (e) {
                 console.error("[CheckerNext] Codex 초기화 기회 응답 처리 중 오류:", e);
-                return response;
+                return;
             }
         }
-
-        return response;
-    };
+    }
 })();
