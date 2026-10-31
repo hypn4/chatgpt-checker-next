@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.3.0.1
+// @version      5.4.1.0
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -28,6 +28,7 @@
         : MODE_CHATGPT;
     const isChatgptMode = currentPageMode === MODE_CHATGPT;
     const isCodexMode = currentPageMode === MODE_CODEX;
+    const CHATGPT_POW_RADIX_KEY = "checker-next-chatgpt-pow-radix";
     const CHATGPT_FAKE_PLAN_KEY = "checker-next-chatgpt-fake-plan";
     const CHATGPT_FAKE_PLAN_ENABLED_KEY =
         "checker-next-chatgpt-fake-plan-enabled";
@@ -37,6 +38,7 @@
         "checker-next-chatgpt-copy-button-enabled";
     const CHATGPT_COPY_DETAILS_KEY = "checker-next-chatgpt-copy-details";
     const CHATGPT_COPY_RAW_KEY = "checker-next-chatgpt-copy-raw";
+    const CHATGPT_COPY_EVENT = "checker-next-copy";
     const CHATGPT_MESSAGE_INFO_KEY = "checker-next-chatgpt-message-info";
     const CHATGPT_MESSAGE_INFO_EVENT = "checker-next-message-info";
     const CHATGPT_APPROVAL_KEY = "checker-next-chatgpt-approval";
@@ -52,6 +54,9 @@
     const CHATGPT_RUNTIME_MODEL_SET_EVENT = "checker-next-runtime-model-set";
     const CHATGPT_RUNTIME_CUSTOM_VALUE = "__checker_next_custom__";
 
+    let powDifficulty = "...";
+    let powRadix =
+        localStorage.getItem(CHATGPT_POW_RADIX_KEY) === "16" ? 16 : 10;
     let chatgptModuleInjectionEnabled =
         isChatgptMode &&
         localStorage.getItem(CHATGPT_MODULE_INJECTION_ENABLED_KEY) !== "false";
@@ -75,13 +80,14 @@
         isChatgptMode &&
         localStorage.getItem(CHATGPT_SELECTION_POPOVER_DISABLED_KEY) === "true";
     let chatgptSelectionPopoverStyle;
-    let chatgptDotCopyStyle;
     let userRegionValue = null;
     let billingCurrency = null;
     let chatgptRuntimeModelState;
     let chatgptRuntimeEnvironmentState;
     let chatgptPlanTypes;
     let chatgptModuleInjectionStarted = false;
+    let chatgptModuleEntries = [];
+    let chatgptRuntimeReady = false;
     let chatgptInjectionFailure;
     const chatgptReportedFailures = new Set();
 
@@ -92,11 +98,6 @@
             textContent:
                 '[role="presentation"].pointer-events-auto.w-fit.max-w-full.overflow-hidden:is(.pointer-events-none.w-max.fixed > *, .flex-wrap) { display: none !important; }',
         });
-        chatgptDotCopyStyle = GM_addElement("style", {
-            media: chatgptCopyButtonEnabled ? "not all" : "all",
-            textContent:
-                ".checker-next-dot-copy-message { display: none !important; }",
-        });
     }
     const NOT_STARTED_BADGE = "<span style=\"color:#9ca3af\"> (시작 전)</span>";
 
@@ -105,23 +106,21 @@
         const prototype = pageWindow.Function.prototype;
         const original = prototype.call;
         let runtime;
-        const fail = (error) => {
-            chatgptInjectionFailure = String(error);
-            reportChatgptFailure(`모듈 주입 실패:${error}`);
-            updateChatgptInjectionStatus();
-        };
         const install = (require) => {
             const { patches, bindings } = createChatgptModulePatches();
             const entries = patches.concat(createChatgptModuleData());
+            chatgptModuleEntries = entries;
             installChatgptRuntimeBridge(require, bindings);
             const processed = new WeakMap();
             const patch = (id, factory) => {
                 if (processed.has(factory)) return processed.get(factory);
                 const source = factory.toString();
                 const target = { id, source };
+                let matched = false;
                 try {
                     for (const entry of entries) {
                         if (!entry.predicate(source)) continue;
+                        matched = true;
                         if (entry.id !== undefined && entry.id !== id)
                             throw new Error(`${entry.label}여러 모듈이 일치함`);
                         if (entry.read) {
@@ -130,7 +129,7 @@
                                     try {
                                         entry.read(require(id));
                                     } catch (error) {
-                                        reportChatgptFailure(
+                                        reportChatgptInjectionFailure(
                                             `읽기(${entry.label}) 실패: ${error}`,
                                         );
                                     }
@@ -146,9 +145,10 @@
                             ? factory
                             : compileChatgptModule(target.source);
                     processed.set(factory, result);
+                    if (matched) queueMicrotask(updateChatgptInjectionStatus);
                     return result;
                 } catch (error) {
-                    fail(error);
+                    reportChatgptInjectionFailure(error);
                     processed.set(factory, factory);
                     return factory;
                 }
@@ -179,7 +179,7 @@
                     try {
                         install(require);
                     } catch (error) {
-                        fail(error);
+                        reportChatgptInjectionFailure(error);
                     }
                     return Reflect.apply(
                         require.m[module.id],
@@ -215,7 +215,6 @@
         let appScope,
             watchedEnvironmentScope,
             stopWatchingEnvironment,
-            watchedPage,
             homeScope,
             homeOrigin,
             scheduled = false,
@@ -227,8 +226,13 @@
                     control.route.pathname === location.pathname &&
                     (control.route.search ?? "") === location.search,
             );
-        const report = (error) =>
-            console.error("[CheckerNext] 런타임 모듈 오류:", error);
+        const report = reportChatgptInjectionFailure;
+        const subscribeCopy = (listener) => {
+            pageWindow.addEventListener(CHATGPT_COPY_EVENT, listener);
+            return () =>
+                pageWindow.removeEventListener(CHATGPT_COPY_EVENT, listener);
+        };
+        const getCopyEnabled = () => chatgptCopyButtonEnabled;
         const subscribeAutoCollapse = (listener) => {
             pageWindow.addEventListener(CHATGPT_AUTO_COLLAPSE_EVENT, listener);
             return () =>
@@ -250,13 +254,6 @@
             }
             return wrapped;
         };
-        const routeId = (pathname = location.pathname) => {
-            const match = pathname.match(
-                /^\/(?:c|share|g\/[^/]+\/(?:shared\/)?c)\/([^/]+)$/,
-            );
-            return match ? decodeURIComponent(match[1]) : null;
-        };
-        const current = () => conversations.get(routeId());
         const useControl = (scope, value) => {
             const control = native.useRef({}).current;
             const route = scope.getOwnValue(native.routeScope);
@@ -281,21 +278,12 @@
             queueMicrotask(() => {
                 scheduled = false;
                 const active = activeControl();
-                const page = location.pathname + location.search;
-                if (watchedPage !== page) {
-                    watchedPage = page;
-                    const conversation = current();
-                    for (const [key, value] of conversations) {
-                        if (value !== conversation) conversations.delete(key);
-                    }
-                }
                 const isDot = active?.kind === "dot";
                 const model = active?.selectedModel;
                 const state = {
                     ready: true,
                     pathname: location.pathname,
                     search: location.search,
-                    copyReady: current()?.copyReady ?? false,
                     available: Boolean(
                         active &&
                             !active.loading &&
@@ -620,9 +608,155 @@
                 event.preventDefault();
             }
         };
+        function CopyButton({ getText, message = false, disabled = false }) {
+            const [state, setState] = native.useState("idle");
+            const copying = native.useRef(false);
+            const timer = native.useRef();
+            native.useLayoutEffect(() => () => clearTimeout(timer.current), []);
+            const icon =
+                state === "success"
+                    ? "copied"
+                    : state === "error"
+                      ? "copyError"
+                      : "copy";
+            const label =
+                state === "loading"
+                    ? "복사 중"
+                    : state === "success"
+                      ? "복사됨"
+                      : state === "error"
+                        ? "복사 실패"
+                        : message
+                          ? "메시지 복사"
+                          : "전체 대화 복사";
+            return native.createElement(
+                message ? "button" : native.button,
+                {
+                    ...(message
+                        ? {
+                              type: "button",
+                              className:
+                                  "button ghost icon-button message-action-button",
+                          }
+                        : { color: "toolbar", size: "toolbar", uniform: true }),
+                    disabled,
+                    "aria-label": label,
+                    title: label,
+                    onClick: async (event) => {
+                        event.stopPropagation();
+                        if (copying.current) return;
+                        copying.current = true;
+                        clearTimeout(timer.current);
+                        setState("loading");
+                        try {
+                            await pageWindow.navigator.clipboard.writeText(
+                                getText(),
+                            );
+                            setState("success");
+                        } catch (error) {
+                            report(error);
+                            setState("error");
+                        } finally {
+                            copying.current = false;
+                        }
+                        timer.current = setTimeout(
+                            () => setState("idle"),
+                            1000,
+                        );
+                    },
+                },
+                native.createElement(native.icon, {
+                    icon: {
+                        assets: {
+                            16: native[`${icon}16`],
+                            20: native[`${icon}20`],
+                        },
+                    },
+                    size: message ? "secondary" : "leading",
+                    "aria-hidden": true,
+                }),
+            );
+        }
+        function CopyHeader({
+            dot = false,
+            allowsThreadContentOverlap,
+            ...props
+        }) {
+            const enabled = native.useSyncExternalStore(
+                subscribeCopy,
+                getCopyEnabled,
+                getCopyEnabled,
+            );
+            if (
+                !enabled ||
+                !native.shell?.HeaderAction ||
+                !native.shell?.HeaderToolbar?.Actions
+            )
+                return null;
+            return native.createElement(
+                native.ErrorBoundary,
+                null,
+                native.createElement(
+                    native.shell.HeaderAction,
+                    {
+                        actionId: "checker-next-copy-conversation",
+                        align: "end",
+                        order: 1,
+                        unifiedSlotPosition: dot ? "thread" : undefined,
+                        allowsThreadContentOverlap,
+                    },
+                    native.createElement(
+                        native.shell.HeaderToolbar.Actions,
+                        null,
+                        native.createElement(CopyButton, props),
+                    ),
+                ),
+            );
+        }
+        function DotCopy({ controller, header = false }) {
+            const timeline = native.useMemo(
+                () =>
+                    controller.services.conversations.timeline(
+                        controller.roomId,
+                    ),
+                [controller],
+            );
+            const state = native.useSyncExternalStore(
+                timeline.subscribe,
+                timeline.getSnapshot,
+                timeline.getSnapshot,
+            );
+            const enabled = native.useSyncExternalStore(
+                subscribeCopy,
+                getCopyEnabled,
+                getCopyEnabled,
+            );
+            if (!enabled) return null;
+            return native.createElement(header ? CopyHeader : CopyButton, {
+                dot: header,
+                disabled: state.messages.length === 0,
+                getText: () => formatDotConversation(controller),
+            });
+        }
         const bridge = {
             register(values) {
                 Object.assign(native, values);
+                if (values.Component) {
+                    native.ErrorBoundary = class extends values.Component {
+                        state = { failed: false };
+                        static getDerivedStateFromError() {
+                            return { failed: true };
+                        }
+                        componentDidCatch(error) {
+                            report(error);
+                        }
+                        render() {
+                            return this.state.failed
+                                ? null
+                                : this.props.children;
+                        }
+                    };
+                }
                 if (values.intl) queueMicrotask(watchEnvironment);
             },
             formatDateToParts(value, options) {
@@ -695,12 +829,12 @@
             libraryHref: (scope) => native.libraryHref(scope),
             scope(fn) {
                 return after(fn, (_, scope) => {
-                    if (!pageWindow.__checkerNextModulesInstalled) {
-                        pageWindow.__checkerNextModulesInstalled = true;
-                        scheduleState();
-                    }
                     if (scope.scope.__scopeBrand === "AppScope") {
                         appScope = scope;
+                        if (!chatgptRuntimeReady) {
+                            chatgptRuntimeReady = true;
+                            queueMicrotask(updateChatgptInjectionStatus);
+                        }
                         queueMicrotask(watchEnvironment);
                     }
                     if (
@@ -837,7 +971,70 @@
             dotController(fn) {
                 return after(fn, (_, controller) => {
                     dotControllers.set(controller.roomId, controller);
+                    controller.dispose = after(controller.dispose, () => {
+                        if (
+                            dotControllers.get(controller.roomId) === controller
+                        )
+                            dotControllers.delete(controller.roomId);
+                    });
+                    queueMicrotask(() =>
+                        pageWindow.dispatchEvent(
+                            new pageWindow.Event(CHATGPT_COPY_EVENT),
+                        ),
+                    );
                 });
+            },
+            dotHeader(fn, Menu) {
+                return function (props) {
+                    const getController = () =>
+                        dotControllers.get(props.roomId);
+                    const controller = native.useSyncExternalStore(
+                        subscribeCopy,
+                        getController,
+                        getController,
+                    );
+                    const result = fn(props);
+                    if (!controller) return result;
+                    const copy = native.createElement(
+                        native.ErrorBoundary,
+                        { key: "checker-next-copy" },
+                        native.createElement(DotCopy, { controller }),
+                    );
+                    let inserted = false;
+                    const children = result.props.children.map((child) => {
+                        if (
+                            child?.props?.actionId !== "orbit-messaging-actions"
+                        )
+                            return child;
+                        const group = child.props.children;
+                        const actions = group.props.children.flatMap(
+                            (action) => {
+                                if (action?.type !== Menu) return [action];
+                                inserted = true;
+                                return [action, copy];
+                            },
+                        );
+                        return native.cloneElement(
+                            child,
+                            {},
+                            native.cloneElement(group, {}, ...actions),
+                        );
+                    });
+                    return native.createElement(
+                        native.Fragment,
+                        null,
+                        native.cloneElement(result, {}, ...children),
+                        !inserted &&
+                            native.createElement(
+                                native.ErrorBoundary,
+                                null,
+                                native.createElement(DotCopy, {
+                                    controller,
+                                    header: true,
+                                }),
+                            ),
+                    );
+                };
             },
             dotMessage(fn) {
                 return function (props) {
@@ -850,63 +1047,27 @@
                 };
             },
             dotActions(fn) {
-                function CopyMessage({ message }) {
-                    const button = native.useRef(null);
-                    const messageRef = native.useRef(message);
-                    native.useLayoutEffect(() => {
-                        messageRef.current = message;
-                    }, [message]);
-                    const sprite = document
-                        .querySelector('svg use[href*="/cdn/assets/icons-"]')
-                        ?.getAttribute("href")
-                        ?.split("#")[0];
-                    native.useLayoutEffect(() => {
-                        if (!button.current || !sprite) return;
-                        return bindChatgptCopyButton(
-                            button.current,
-                            () => {
-                                const text = messageRef.current.text;
-                                if (!text)
-                                    throw new Error("메시지에 복사할 본문이 없습니다.");
-                                return text;
-                            },
-                            sprite,
-                            "메시지 복사",
-                        );
-                    }, [message.id, message.roomId, sprite]);
-                    return native.createElement(
-                        "button",
-                        {
-                            ref: button,
-                            type: "button",
-                            "aria-label": "메시지 복사",
-                            title: "메시지 복사",
-                            className:
-                                "button ghost icon-button message-action-button checker-next-dot-copy-message",
-                        },
-                        native.createElement(
-                            "svg",
-                            {
-                                "aria-hidden": true,
-                                width: 16,
-                                height: 16,
-                                viewBox: "0 0 16 16",
-                            },
-                            native.createElement("use", {
-                                href: `${sprite}#square-on-square-light-16`,
-                                fill: "currentColor",
-                            }),
-                        ),
-                    );
-                }
                 return function (props) {
                     const message = native.useContext(dotMessageContext);
+                    const enabled = native.useSyncExternalStore(
+                        subscribeCopy,
+                        getCopyEnabled,
+                        getCopyEnabled,
+                    );
                     const actions = fn(props);
-                    if (!message) return actions;
-                    const copy = native.createElement(CopyMessage, {
-                        key: "checker-next-copy",
-                        message,
-                    });
+                    if (!message || !enabled) return actions;
+                    const copy = native.createElement(
+                        native.ErrorBoundary,
+                        { key: "checker-next-copy" },
+                        native.createElement(CopyButton, {
+                            message: true,
+                            getText: () => {
+                                if (!message.text)
+                                    throw new Error("메시지에 복사할 본문이 없습니다.");
+                                return message.text;
+                            },
+                        }),
+                    );
                     return native.cloneElement(
                         actions,
                         {},
@@ -937,22 +1098,11 @@
                     );
                 };
             },
-            dotConversation(roomId) {
-                const controller = dotControllers.get(roomId);
-                return (
-                    controller && {
-                        messages:
-                            controller.services.conversations.get(roomId)
-                                .messages,
-                        room: controller.state.getSnapshot().room,
-                    }
-                );
-            },
             turns(fn) {
                 return after(fn, ([props]) => {
                     const conversation = {
                         id: props.conversationId,
-                        serverId: props.browserConversationId,
+                        isWorkConversation: props.isWorkConversation,
                         copyReady: props.renderedTurns.length > 0,
                         turns:
                             props.isReadOnly || props.isTemporaryChat
@@ -960,20 +1110,41 @@
                                 : undefined,
                     };
                     conversations.set(conversation.id, conversation);
-                    if (conversation.serverId)
-                        conversations.set(conversation.serverId, conversation);
-                    const temporaryId = props.isTemporaryChat && routeId();
-                    if (temporaryId)
-                        conversations.set(temporaryId, conversation);
-                    scheduleState();
                 });
             },
-            toolbar(fn, jsx, Actions) {
+            chatView(fn) {
                 return function (props) {
-                    return jsx(fn, {
-                        ...props,
-                        children: jsx(Actions, { children: props.children }),
-                    });
+                    const result = fn(props);
+                    const id = props.conversationId;
+                    const conversation = conversations.get(id);
+                    native.useLayoutEffect(() => {
+                        if (conversation) conversations.set(id, conversation);
+                        return () => {
+                            if (conversations.get(id) === conversation)
+                                conversations.delete(id);
+                        };
+                    }, [id, conversation]);
+                    return native.createElement(
+                        native.Fragment,
+                        null,
+                        result,
+                        !props.isInlinePreview &&
+                            !props.workspace &&
+                            getChatgptPage() === "chat" &&
+                            native.createElement(CopyHeader, {
+                                allowsThreadContentOverlap:
+                                    !conversation?.isWorkConversation,
+                                disabled: !conversation?.copyReady,
+                                getText: () =>
+                                    formatChatgptConversation(
+                                        bridge.getTurns(
+                                            id,
+                                            chatgptCopyDetailsEnabled,
+                                        ),
+                                        id,
+                                    ),
+                            }),
+                    );
                 };
             },
             conversation(fn) {
@@ -1125,7 +1296,7 @@
                                 React.Fragment,
                                 null,
                                 props.sourcesAction,
-                                appScope
+                                appScope && native.mapping
                                     ? React.createElement(MessageInfo, {
                                           conversationId: props.conversationId,
                                       })
@@ -1144,7 +1315,9 @@
                         );
                     }
                     return React.createElement(
-                        appScope && props.item?.type === "user-message"
+                        appScope &&
+                            native.mapping &&
+                            props.item?.type === "user-message"
                             ? MessageInfo
                             : fn,
                         props,
@@ -1167,20 +1340,15 @@
                     });
                 };
             },
-            time(fn, jsx) {
+            time(fn) {
                 return function (props) {
                     const result = fn(props);
                     return result
-                        ? jsx(
-                              result.type,
-                              {
-                                  ...result.props,
-                                  title:
-                                      props.title ??
-                                      formatAbsoluteTime(props.sentAtMs),
-                              },
-                              result.key,
-                          )
+                        ? native.cloneElement(result, {
+                              title:
+                                  props.title ??
+                                  formatAbsoluteTime(props.sentAtMs),
+                          })
                         : result;
                 };
             },
@@ -1303,8 +1471,8 @@
                     { throwOnError: true },
                 );
             },
-            getTurns(includeDetails = false) {
-                const conversation = current();
+            getTurns(conversationId, includeDetails = false) {
+                const conversation = conversations.get(conversationId);
                 const scope = appScope;
                 if (!conversation) throw new Error("현재 대화가 아직 로드되지 않음");
                 if (!scope && (includeDetails || !conversation.turns))
@@ -1339,7 +1507,7 @@
                     scope.get(native.turns, conversation.id)
                 );
             },
-            getMessageText(item) {
+            getMessageText(item, conversationId) {
                 if (item.source) {
                     const message = item.source;
                     const { content, metadata = {} } = message;
@@ -1405,7 +1573,7 @@
                 ) {
                     const mapping = appScope?.get(
                         native.mapping,
-                        current()?.id,
+                        conversationId,
                     );
                     return (item.sourceMessageIds ?? [item.messageId])
                         .map((id) => {
@@ -1460,20 +1628,23 @@
                         return;
                     }
                     if (detail.origin === "chat" || detail.origin === "work") {
-                        const conversation = current();
-                        if (routeId() !== null) {
+                        const conversation = conversations.get(conversationId);
+                        if (getChatgptPage() === "chat") {
                             if (!conversation || !appScope)
                                 throw new Error("현재 대화 상태가 아직 로드되지 않음");
                             const origin =
                                 detail.origin === "work" ? "tpp" : null;
                             origins.set(conversation.id, origin);
-                            if (conversation.serverId)
-                                origins.set(conversation.serverId, origin);
+                            const serverId = appScope.get(
+                                native.serverId,
+                                conversation.id,
+                            );
+                            if (serverId) origins.set(serverId, origin);
                             native.setOrigin(appScope, conversation.id, origin);
                             appScope.queryClient.setQueryData(
                                 [
                                     "chatgpt-conversation",
-                                    conversation.serverId ?? conversation.id,
+                                    serverId ?? conversation.id,
                                 ],
                                 applyOrigin,
                             );
@@ -1566,10 +1737,10 @@
         );
     }
 
-    function compileChatgptModule(source) {
+    function compileChatgptModule(source, strict = true) {
         const script = document.createElement("script");
         script.nonce = document.querySelector("script[nonce]")?.nonce ?? "";
-        script.textContent = `"use strict";globalThis.__checkerNextModule=Object.values({${source}})[0];`;
+        script.textContent = `${strict ? '"use strict";' : ""}globalThis.__checkerNextModule=Object.values({${source}})[0];`;
         try {
             document.head.append(script);
             const factory = pageWindow.__checkerNextModule;
@@ -1586,29 +1757,63 @@
         const [, exports, require] = source.match(
             /^[^(]+\([^,]+,([^,]+),([^)]*)\)\{/,
         );
-        const pattern = new RegExp(
-            `${RegExp.escape(require)}\\.d\\(${RegExp.escape(exports)},\\{([^{}]*)\\}(?:,\\{([^{}]*)\\})?`,
-            "g",
-        );
-        return Object.fromEntries(
-            [...source.matchAll(pattern)].flatMap((match) =>
-                (gettersOnly ? [match[1]] : [match[1], match[2] ?? ""]).flatMap(
-                    (table) =>
-                        [
-                            ...table.matchAll(
-                                /(?:^|,)([\w$]+):(?:\(\)=>)?([\w$.]+)/g,
-                            ),
-                        ].map((entry) => [entry[1], entry[2]]),
-                ),
+        const match = source.match(
+            new RegExp(
+                `${RegExp.escape(require)}\\.d\\(${RegExp.escape(exports)},\\{([^{}]*)\\}`,
             ),
         );
+        if (!match) return {};
+        const getters = Object.fromEntries(
+            [...match[1].matchAll(/(?:^|,)([\w$]+):\(\)=>([\w$.]+)/g)].map(
+                (entry) => [entry[1], entry[2]],
+            ),
+        );
+        const offset = match.index + match[0].length;
+        if (gettersOnly || source[offset] !== ",") return getters;
+
+        const references = new WeakMap();
+        const reference = (name) => {
+            const value = new Proxy(
+                {},
+                { get: (_, key) => reference(`${name}.${String(key)}`) },
+            );
+            references.set(value, name);
+            return value;
+        };
+        const scope = new Proxy(
+            {},
+            {
+                has: () => true,
+                get: (_, key) =>
+                    key === Symbol.unscopables
+                        ? undefined
+                        : reference(String(key)),
+            },
+        );
+        const values = source.slice(offset + 1, source.lastIndexOf("})") + 1);
+        const definitions = compileChatgptModule(
+            `read(scope){with(scope){return ${values}}}`,
+            false,
+        )(scope);
+        return {
+            ...getters,
+            ...Object.fromEntries(
+                Object.entries(definitions).map(([key, value]) => [
+                    key,
+                    references.get(value) ??
+                        (typeof value === "string"
+                            ? JSON.stringify(value)
+                            : value),
+                ]),
+            ),
+        };
     }
 
     function createChatgptModulePatches() {
         const patches = [];
         const bindings = {};
-        const module = (label, predicate, apply) =>
-            patches.push({ label, predicate, apply });
+        const module = (label, predicate, apply, page) =>
+            patches.push({ label, predicate, apply, page });
         const single = (items, label) => {
             if (items.length !== 1)
                 throw new Error(`${label}에서 일치한 결과: ${items.length} 개`);
@@ -1616,21 +1821,37 @@
         };
         const exported = (target, label, predicate) => {
             if (!target.functions) {
+                target.exports = getChatgptModuleExports(target.source);
+                target.getters = getChatgptModuleExports(target.source, true);
                 const declarations = new Set(
                     [...target.source.matchAll(/\bfunction\s+([\w$]+)\(/g)].map(
                         (match) => match[1],
                     ),
                 );
-                const members = Object.entries(
-                    getChatgptModuleExports(target.source, true),
-                )
+                const members = Object.entries(target.exports)
                     .filter(([, name]) => declarations.has(name))
-                    .map(([key, name]) => `${JSON.stringify(key)}:${name}`)
+                    .map(([key, name]) => `${JSON.stringify(key)}:()=>${name}`)
                     .join(",");
-                // 函数声明在入口前完成提升，提前返回即可读取其源码。
-                target.functions = compileChatgptModule(
-                    target.source.replace("{", `{return {${members}};`),
-                )();
+                target.functions = Object.fromEntries(
+                    Object.entries(target.exports).filter(
+                        ([, value]) => typeof value === "function",
+                    ),
+                );
+                // 函数声明在入口前完成提升，词法绑定保留为状态引用。
+                const getters = members
+                    ? compileChatgptModule(
+                          target.source.replace("{", `{return {${members}};`),
+                      )()
+                    : {};
+                for (const [key, get] of Object.entries(getters)) {
+                    try {
+                        const value = get();
+                        if (typeof value === "function")
+                            target.functions[key] = value;
+                    } catch (error) {
+                        if (error.name !== "ReferenceError") throw error;
+                    }
+                }
             }
             const matches = Object.entries(target.functions).filter(
                 ([exportName, fn]) =>
@@ -1639,14 +1860,16 @@
                         : predicate(fn.toString()),
             );
             const [exportName, fn] = single(
-                [
-                    ...new Map(
-                        matches.map((item) => [item[1].name, item]),
-                    ).values(),
-                ],
+                [...new Map(matches.map((item) => [item[1], item])).values()],
                 label,
             );
-            return { exportName, name: fn.name, toString: () => fn.toString() };
+            return {
+                exportName,
+                name: fn.name,
+                inline: typeof target.exports[exportName] === "function",
+                getter: exportName in target.getters,
+                toString: () => fn.toString(),
+            };
         };
         const append = (target, addition) => {
             target.source = `${target.source.slice(0, -1)};${addition}}`;
@@ -1654,7 +1877,22 @@
         const replace = (target, from, to) => {
             if (!target.source.includes(from))
                 throw new Error("네이티브 함수 정의가 일치하지 않음");
-            target.source = target.source.replace(from, to);
+            target.source = target.source.replace(from, () => to);
+        };
+        const wrap = (target, fn, wrapper) => {
+            const value = fn.inline ? fn.toString() : fn.name;
+            const wrapped = `${wrapper}(${value})`;
+            if (fn.inline) {
+                replace(target, value, wrapped);
+            } else if (fn.getter) {
+                append(target, `${fn.name}=${wrapped};`);
+            } else {
+                const [, exports, require] = target.source.match(
+                    /^[^(]+\([^,]+,([^,]+),([^)]*)\)\{/,
+                );
+                const define = `${require}.d(${exports},`;
+                replace(target, define, `${fn.name}=${wrapped};${define}`);
+            }
         };
         const api = "globalThis.__checkerNextRuntimeModelBridge";
         const fakePlan = `localStorage.getItem(${JSON.stringify(CHATGPT_FAKE_PLAN_ENABLED_KEY)})==="true"?localStorage.getItem(${JSON.stringify(CHATGPT_FAKE_PLAN_KEY)})||"pro":""`;
@@ -1677,8 +1915,7 @@
             "반응형 상태 모듈",
             (source) =>
                 source.includes("getOwnValue") &&
-                source.includes("createSubscriberStore") &&
-                source.includes("Missing parent scope"),
+                source.includes("createSubscriberStore"),
             (scopes) => {
                 const useScope = exported(
                     scopes,
@@ -1708,10 +1945,63 @@
                 )[1];
                 append(
                     scopes,
-                    `${api}.register({useMemo:${react}.useMemo,useRef:${react}.useRef,useLayoutEffect:${react}.useLayoutEffect,createElement:${react}.createElement,createContext:${react}.createContext,useContext:${react}.useContext,cloneElement:${react}.cloneElement,useSyncExternalStore:${react}.useSyncExternalStore});${useScope.name}=${api}.scope(${useScope.name});`,
+                    `${api}.register({useMemo:${react}.useMemo,useRef:${react}.useRef,useState:${react}.useState,useLayoutEffect:${react}.useLayoutEffect,createElement:${react}.createElement,createContext:${react}.createContext,useContext:${react}.useContext,cloneElement:${react}.cloneElement,Fragment:${react}.Fragment,Component:${react}.Component,useSyncExternalStore:${react}.useSyncExternalStore});`,
                 );
+                wrap(scopes, useScope, `${api}.scope`);
             },
         );
+
+        module(
+            "按钮组件模块",
+            (source) =>
+                source.includes("uniformAtMobile:") &&
+                source.includes("sizingLabels:"),
+            (button) => {
+                const render = exported(button, "按钮组件", (source) =>
+                    /^function(?: [\w$]+)?\([\w$]+\)\{let [^{}]*;return /.test(
+                        source,
+                    ),
+                );
+                bindings.button = [button.id, render.exportName];
+            },
+        );
+
+        module(
+            "图标组件模块",
+            (source) =>
+                source.includes("icon16:") && source.includes(".CompactSource"),
+            (icon) => {
+                const render = exported(icon, "图标组件", (source) =>
+                    source.includes('"assets"in'),
+                );
+                bindings.icon = [icon.id, render.exportName];
+            },
+        );
+
+        for (const [name, asset] of [
+            ["copy16", "square-on-square-light-16"],
+            ["copy20", "square-on-square-light-20"],
+            ["copied16", "checkmark-lg-light-16"],
+            ["copied20", "checkmark-lg-light-20"],
+            ["copyError16", "circle-exclamation-mark-light-16"],
+            ["copyError20", "circle-exclamationmark-light-20"],
+        ]) {
+            module(
+                asset,
+                (source) => source.includes(`={kind:"sprite",name:"${asset}"`),
+                (icon) => {
+                    const [, exportName] = single(
+                        [
+                            ...icon.source.matchAll(
+                                /[\w$]+\.([\w$]+)=\{kind:"sprite",name:/g,
+                            ),
+                        ],
+                        "图标资源",
+                    );
+                    bindings[name] = [icon.id, exportName];
+                },
+            );
+        }
 
         module(
             "사이드바 탐색 컴포넌트 모듈",
@@ -1722,10 +2012,7 @@
                 const item = exported(navigation, "사이드바 탐색 항목", (source) =>
                     source.includes("sidebar.navItem.unread"),
                 );
-                append(
-                    navigation,
-                    `${item.name}=${api}.sidebarNav(${item.name});`,
-                );
+                wrap(navigation, item, `${api}.sidebarNav`);
             },
         );
 
@@ -1738,10 +2025,7 @@
                 const render = exported(row, "사이드바 행", (source) =>
                     source.includes("hasNavigationLink:"),
                 );
-                append(
-                    row,
-                    `${render.name}=${api}.sidebarRow(${render.name});`,
-                );
+                wrap(row, render, `${api}.sidebarRow`);
             },
         );
 
@@ -1768,6 +2052,7 @@
                         getChatgptModuleExports(routes.source),
                     ).filter(
                         ([, name]) =>
+                            typeof name !== "function" &&
                             !routes.source.includes(`function ${name}(`),
                     ),
                     "사이드바 라우팅 테이블",
@@ -1827,10 +2112,7 @@
 
         module(
             "새 채팅 이동 버튼 모듈",
-            (source) =>
-                source.includes("newChatMessage:") &&
-                source.includes("disabled:") &&
-                source.includes("staticIcon:"),
+            (source) => /\{[^{}]*\bnewChatMessage:[^{}]*\}=[\w$]+/.test(source),
             (button) => {
                 const [, start] = single(
                     [...button.source.matchAll(/onStartChat:([\w$]+)/g)],
@@ -1867,8 +2149,9 @@
         module(
             "사이드바 기능 진입점 모듈",
             (source) =>
-                source.includes('animatedIcon:"sidebar-images"') &&
-                source.includes('animatedIcon:"sidebar-library"'),
+                /onSelect:(?:\(\)|[\w$]+)=>/.test(source) &&
+                /onRestore:\(\)=>/.test(source) &&
+                source.includes("isCurrentDestination:"),
             (features) => {
                 features.source = features.source.replaceAll(
                     /onSelect:(?:\(\)|[\w$]+)=>\{(?:[\w$]+\(\),)?[\w$]+\(("[^"\\]+"|[\w$]+\.[\w$]+)(?=[,)])/g,
@@ -1890,25 +2173,23 @@
             },
         );
 
-        module(
-            "모델 컨트롤 모듈",
-            (source) =>
-                source.includes("xHighExperimentResetContextKey") &&
-                source.includes("onThinkingEffortChange"),
-            (picker) => {
-                const renderPicker = exported(
-                    picker,
-                    "모델 컨트롤",
-                    (source) =>
-                        source.includes("xHighExperimentResetContextKey") &&
-                        source.includes("onThinkingEffortChange"),
-                );
-                append(
-                    picker,
-                    `${renderPicker.name}=${api}.picker(${renderPicker.name});`,
-                );
-            },
-        );
+        const modelPicker = (source) =>
+            [
+                ...source.matchAll(
+                    /\{([^{}]*\bonThinkingEffortChange:[^{}]*)\}=[\w$]+/g,
+                ),
+            ].some(([, props]) =>
+                [
+                    "models:",
+                    "selectedModel:",
+                    "onModelChange:",
+                    "isTppConversation:",
+                ].every((property) => props.includes(property)),
+            );
+        module("모델 컨트롤 모듈", modelPicker, (picker) => {
+            const renderPicker = exported(picker, "모델 컨트롤", modelPicker);
+            wrap(picker, renderPicker, `${api}.picker`);
+        });
 
         module(
             "대화 렌더링 모듈",
@@ -1919,32 +2200,61 @@
                 const renderTurns = exported(turns, "대화 콘텐츠 인터페이스", (source) =>
                     source.includes("timestampSeparatorAtMs"),
                 );
-                append(
-                    turns,
-                    `${renderTurns.name}=${api}.turns(${renderTurns.name});`,
-                );
+                wrap(turns, renderTurns, `${api}.turns`);
             },
+            "chat",
         );
 
         module(
-            "Dots 메시지 상태 모듈",
+            "会话页面模块",
             (source) =>
-                source.includes(
-                    "historyAnchor:void 0,newerLoading:!1,messages:[]",
-                ) &&
-                source.includes("services:{") &&
-                source.includes("renderMessageFooter:"),
-            (messages) => {
-                const create = single(
+                source.includes("ChatGptConversationPage:") &&
+                source.includes("ChatGptSharedConversationPage:"),
+            (page) => {
+                const view = exported(page, "会话页面", (source) =>
+                    /\{[^{}]*\bisInlinePreview:[^{}]*\}=[\w$]+/.test(source),
+                );
+                const source = view.toString();
+                const serverId = single(
                     [
-                        ...messages.source.matchAll(
-                            /historyAnchor:void 0,newerLoading:!1,messages:\[\][\s\S]*?function ([\w$]+)\(/g,
+                        ...new Set(
+                            [
+                                ...source.matchAll(
+                                    /serverConversationId:([\w$]+)/g,
+                                ),
+                            ].map((match) => match[1]),
                         ),
                     ],
-                    "Dots 메시지 컨트롤러",
-                )[1];
-                append(messages, `${create}=${api}.dotController(${create});`);
+                    "会话服务端 ID",
+                );
+                const [, selector] = single(
+                    [
+                        ...source.matchAll(
+                            new RegExp(
+                                `${RegExp.escape(serverId)}=\\(0,[\\w$]+\\.[\\w$]+\\)\\(([\\w$]+\\.[\\w$]+),[\\w$]+\\)`,
+                                "g",
+                            ),
+                        ),
+                    ],
+                    "会话 ID 状态",
+                );
+                append(page, `${api}.register({serverId:${selector}});`);
+                wrap(page, view, `${api}.chatView`);
             },
+            "chat",
+        );
+
+        const dotController = /\{[^{}]*\bsubscribeToUpdates:[^{}]*\}=[\w$]+/;
+        module(
+            "Dots 메시지 상태 모듈",
+            (source) => dotController.test(source),
+            (messages) => {
+                const create = exported(messages, "Dots 메시지 컨트롤러", (source) =>
+                    dotController.test(source),
+                );
+                wrap(messages, create, `${api}.dotController`);
+            },
+            "dot",
         );
 
         module(
@@ -1956,7 +2266,7 @@
                 const renderMessage = single(
                     [
                         ...messages.source.matchAll(
-                            /function ([\w$]+)\(e\)\{(?:(?!function [\w$]+\()[\s\S])*?className:`message-row \$\{/g,
+                            /function ([\w$]+)\([\w$]+\)\{(?:(?!function [\w$]+\()[\s\S])*?className:`message-row \$\{/g,
                         ),
                     ],
                     "Dots 메시지 행",
@@ -1964,7 +2274,7 @@
                 const actions = single(
                     [
                         ...messages.source.matchAll(
-                            /function ([\w$]+)\(e\)\{(?:(?!function [\w$]+\()[\s\S])*?`message-inline-actions\$\{/g,
+                            /function ([\w$]+)\([\w$]+\)\{(?:(?!function [\w$]+\()[\s\S])*?`message-inline-actions\$\{/g,
                         ),
                     ],
                     "Dots 메시지 액션 바",
@@ -1974,12 +2284,57 @@
                     `${renderMessage}=${api}.dotMessage(${renderMessage});${actions}=${api}.dotActions(${actions});`,
                 );
             },
+            "dot",
+        );
+
+        module(
+            "Dot 顶栏模块",
+            (source) => source.includes('actionId:"orbit-messaging-actions"'),
+            (header) => {
+                const render = single(
+                    [
+                        ...header.source.matchAll(
+                            /function ([\w$]+)\([\w$]+\)\{(?:(?!function [\w$]+\()[\s\S])*?actionId:"orbit-messaging-actions"/g,
+                        ),
+                    ],
+                    "Dot 顶栏",
+                )[1];
+                const menu = single(
+                    [
+                        ...new Set(
+                            [
+                                ...header.source.matchAll(
+                                    /\(0,[\w$]+\.(?:jsx|jsxs)\)\(([\w$]+),\{([^{}]*)/g,
+                                ),
+                            ]
+                                .filter((match) =>
+                                    [
+                                        "conversationId:",
+                                        "roomId:",
+                                        "shareableDot:",
+                                    ].every((property) =>
+                                        match[2].includes(property),
+                                    ),
+                                )
+                                .map((match) => match[1]),
+                        ),
+                    ],
+                    "Dot 更多操作",
+                );
+                append(
+                    header,
+                    `${render}=${api}.dotHeader(${render},${menu});`,
+                );
+            },
+            "dot",
         );
 
         module(
             "분석 내용 모듈",
             (source) =>
-                source.includes("allowCollapseBeforeFinal:") &&
+                /\{[^{}]*\ballowCollapseBeforeFinal:[^{}]*\}=[\w$]+/.test(
+                    source,
+                ) &&
                 source.includes("preventAutoCollapse:") &&
                 source.includes("agentActivityProps:"),
             (analysis) => {
@@ -1987,38 +2342,26 @@
                     analysis,
                     "분석 내용 컴포넌트",
                     (source) =>
-                        source.includes("allowCollapseBeforeFinal:") &&
-                        source.includes("persistedCollapsed:"),
+                        /\{[^{}]*\ballowCollapseBeforeFinal:[^{}]*\}=[\w$]+/.test(
+                            source,
+                        ) && source.includes("persistedCollapsed:"),
                 );
-                append(
-                    analysis,
-                    `${activity.name}=${api}.analysis(${activity.name});`,
-                );
+                wrap(analysis, activity, `${api}.analysis`);
             },
+            "chat",
         );
 
         module(
-            "대화 툴바 모듈",
+            "页面布局模块",
             (source) =>
-                source.includes('actionId:"chatgpt-conversation-actions"'),
-            (toolbar) => {
-                const render = exported(toolbar, "대화 액션 바", (source) =>
-                    source.includes('actionId:"chatgpt-conversation-actions"'),
+                source.includes("HeaderAction:") &&
+                source.includes("HeaderToolbar:"),
+            (shell) => {
+                const [exportName] = single(
+                    Object.entries(getChatgptModuleExports(shell.source)),
+                    "页面布局接口",
                 );
-                const [, jsx, shell] = single(
-                    [
-                        ...render
-                            .toString()
-                            .matchAll(
-                                /\(0,([\w$]+)\.jsx\)\(([\w$]+\.[\w$]+)\.HeaderAction,/g,
-                            ),
-                    ],
-                    "네이티브 툴바 인터페이스",
-                );
-                append(
-                    toolbar,
-                    `${render.name}=${api}.toolbar(${render.name},${jsx}.jsx,${shell}.HeaderToolbar.Actions);`,
-                );
+                bindings.shell = [shell.id, exportName];
             },
         );
 
@@ -2027,11 +2370,16 @@
             (source) =>
                 source.includes("context_truncation_continuation:") &&
                 source.includes("getRenderTelemetry:") &&
-                source.includes("isStreaming:") &&
-                !source.includes("function "),
+                source.includes("isStreaming:(0,"),
             (content) => {
                 const [contentExport] = single(
-                    Object.entries(getChatgptModuleExports(content.source)),
+                    Object.entries(
+                        getChatgptModuleExports(content.source),
+                    ).filter(
+                        ([, name]) =>
+                            typeof name !== "function" &&
+                            !content.source.includes(`function ${name}(`),
+                    ),
                     "대화 콘텐츠 선택기",
                 );
                 bindings.turns = [content.id, contentExport];
@@ -2192,12 +2540,13 @@
                 );
                 bindings.codeContent = [code.id, content.exportName];
             },
+            "chat",
         );
 
         module(
             "Markdown 직렬화 모듈",
             (source) =>
-                source.includes('"data-prompt-link-href"') &&
+                source.includes('type:"link",url:') &&
                 source.includes("resourceLink:!0"),
             (markdown) => {
                 const link = exported(markdown, "Markdown 링크", (source) =>
@@ -2259,7 +2608,7 @@
         }
 
         const threadSettings =
-            /[\w$]+=\(0,[\w$]+\.[\w$]+\)\("modelSettings"\),([\w$]+)=/;
+            /([\w$]+)=\(0,[\w$]+\.[\w$]+\)\("modelSettings"\)/;
         module(
             "작업 모델 상태 모듈",
             (source) => threadSettings.test(source),
@@ -2268,7 +2617,10 @@
                 const host = single(
                     [
                         ...state.source.matchAll(
-                            /function [\w$]+\(e,t\)\{return [\w$]+\(e,t\)\?\.getHostId\(\)\?\?e\.get\(([\w$]+),t\)\}/g,
+                            new RegExp(
+                                `${RegExp.escape(settings)},\\{hostId:[\\w$]+\\?\\.managerHostId\\?\\?[\\w$]+\\(([\\w$.]+),[\\w$]+\\),threadId:[\\w$]+\\}`,
+                                "g",
+                            ),
                         ),
                     ],
                     "작업 호스트 상태",
@@ -2335,15 +2687,13 @@
                     "Dot 대화 인터페이스",
                     "AeonMessagingRoomView",
                 );
-                append(
-                    dot,
-                    `${renderDot.name}=${api}.dotPicker(${renderDot.name});`,
-                );
+                wrap(dot, renderDot, `${api}.dotPicker`);
             },
+            "dot",
         );
 
         const conversationOrigin =
-            /function [\w$]+\([\w$]+,[\w$]+,([\w$]+)\)\{[^{}]*\{[^{}]*conversationOrigin:\1\?\?null\}/;
+            /function(?: [\w$]+)?\([\w$]+,[\w$]+,([\w$]+)\)\{[^{}]*\{[^{}]*conversationOrigin:\1\?\?null\}/;
         module(
             "대화 상태 모듈",
             (source) => conversationOrigin.test(source),
@@ -2366,10 +2716,7 @@
                 const store = exported(conversation, "대화 스토어 인터페이스", (source) =>
                     conversationStore.test(source),
                 );
-                append(
-                    conversation,
-                    `${store.name}=${api}.conversation(${store.name});`,
-                );
+                wrap(conversation, store, `${api}.conversation`);
             },
         );
 
@@ -2382,7 +2729,7 @@
                 const query = exported(queries, "대화 쿼리 인터페이스", (source) =>
                     source.includes('queryKey:["chatgpt-conversation",'),
                 );
-                append(queries, `${query.name}=${api}.query(${query.name});`);
+                wrap(queries, query, `${api}.query`);
             },
         );
 
@@ -2397,7 +2744,9 @@
                     home,
                     "홈 모드 인터페이스",
                     (source) =>
-                        /^function [\w$]+\([\w$]+,[\w$]+\)\{/.test(source) &&
+                        /^function(?: [\w$]+)?\([\w$]+,[\w$]+\)\{/.test(
+                            source,
+                        ) &&
                         source.includes('"chat"===') &&
                         source.includes(".set("),
                 );
@@ -2429,7 +2778,7 @@
                     [
                         ...resolveHome
                             .toString()
-                            .matchAll(/^function [\w$]+\(([\w$]+)\)\{/g),
+                            .matchAll(/^function(?: [\w$]+)?\(([\w$]+)\)\{/g),
                     ],
                     "홈 모드 매개변수",
                 )[1];
@@ -2450,7 +2799,6 @@
         module(
             "모델 파싱 모듈",
             (source) =>
-                source.includes("default_slider_upgrades") &&
                 source.includes("workspace_model_policy") &&
                 source.includes("modelConfigBySlug"),
             (models) => {
@@ -2462,17 +2810,15 @@
                         source.includes("internalOptions:") &&
                         source.includes("workspaceModelPolicy:"),
                 );
-                append(
-                    models,
-                    `${parseModels.name}=${api}.models(${parseModels.name});`,
-                );
+                wrap(models, parseModels, `${api}.models`);
                 const resolveModel = exported(
                     models,
                     "모델 옵션 파싱 인터페이스",
                     (source) =>
-                        /^function [\w$]+\([\w$]+,[\w$]+\)\{/.test(source) &&
-                        source.includes("defaultThinkingEffortByModelSlug") &&
-                        source.includes("internalOptions"),
+                        /^function(?: [\w$]+)?\([\w$]+,[\w$]+\)\{/.test(
+                            source,
+                        ) &&
+                        source.includes("defaultThinkingEffortByModelSlug"),
                 );
                 const modelVersion = exported(
                     models,
@@ -2501,7 +2847,7 @@
                 );
                 const limitModel = resolveLimit
                     .toString()
-                    .match(/^function [\w$]+\([^,]+,([^,]+),/)?.[1];
+                    .match(/^function(?: [\w$]+)?\([^,]+,([^,]+),/)?.[1];
                 if (!limitModel) throw new Error("모델 한도 매개변수가 일치하지 않음");
                 replace(
                     limits,
@@ -2517,10 +2863,44 @@
         );
 
         module(
+            "授权组件模块",
+            (source) =>
+                source.includes(".codex_mcp_elicitation?.kind") &&
+                source.includes("approveDisabled:") &&
+                source.includes("connectionRequired"),
+            (approval) => {
+                const render = single(
+                    [
+                        ...approval.source.matchAll(
+                            /=([\w$]+);return [\w$]+\.request\?\.body\.codex_mcp_elicitation\?\.kind==="openaiForm"/g,
+                        ),
+                    ],
+                    "승인 컴포넌트",
+                )[1];
+                const react = single(
+                    [
+                        ...new Set(
+                            [
+                                ...approval.source.matchAll(
+                                    /\(0,([\w$]+)\.useState\)/g,
+                                ),
+                            ].map((match) => match[1]),
+                        ),
+                    ],
+                    "React 인터페이스",
+                );
+                append(
+                    approval,
+                    `${render}=${api}.approval(${render},${react});`,
+                );
+            },
+            "chat",
+        );
+
+        module(
             "메시지 작업 모듈",
             (source) =>
                 source.includes("copyPlainTextFromSource") &&
-                source.includes("suppressCopyTurnToClipboardAnalytics") &&
                 source.includes("getCopyHtml"),
             (messages) => {
                 const copyText = single(
@@ -2551,14 +2931,6 @@
                     messages,
                     `${api}.register({messageText:${copyText},parseMarkdown:content=>${parse}(content,{extensions:[${extensions}()],mdastExtensions:[${mdastExtensions}()]}),resolveReference:${resolve}});`,
                 );
-                const approval = single(
-                    [
-                        ...messages.source.matchAll(
-                            /let [\w$]+=([\w$]+);[\w$]+\.request\?\.body\.codex_mcp_elicitation\?\.kind==="openaiForm"/g,
-                        ),
-                    ],
-                    "승인 컴포넌트",
-                )[1];
                 const react = single(
                     [
                         ...new Set(
@@ -2570,10 +2942,6 @@
                         ),
                     ],
                     "React 인터페이스",
-                );
-                append(
-                    messages,
-                    `${approval}=${api}.approval(${approval},${react});`,
                 );
                 const renderMessage = single(
                     [
@@ -2609,7 +2977,7 @@
                                 .filter((match) =>
                                     [
                                         "assistantItem:",
-                                        "additionalTurnActions:",
+                                        "sourcesAction:",
                                         "actionRowRef:",
                                     ].every((property) =>
                                         match[2].includes(property),
@@ -2625,6 +2993,7 @@
                     `${renderMessage}=${api}.message(${renderMessage},${react});${renderActions}=${api}.message(${renderActions},${react},true);`,
                 );
             },
+            "chat",
         );
 
         module(
@@ -2642,19 +3011,15 @@
                         source.includes("weekdayFormat:") &&
                         source.includes(".formatDate("),
                 );
-                append(
-                    time,
-                    `${format.name}=${api}.timeFormat(${format.name});`,
-                );
+                wrap(time, format, `${api}.timeFormat`);
             },
+            "chat",
         );
 
         module(
             "메시지 시간 모듈",
             (source) =>
-                source.includes("nowMs:") &&
-                source.includes("weekdayFormat:") &&
-                source.includes("text-xs text-tertiary"),
+                source.includes("nowMs:") && source.includes("weekdayFormat:"),
             (time) => {
                 const render = exported(
                     time,
@@ -2663,16 +3028,10 @@
                         source.includes("sentAtMs:") &&
                         source.includes("weekdayFormat:"),
                 );
-                const jsx = single(
-                    [...render.toString().matchAll(/\(0,([\w$]+)\.jsx\)/g)],
-                    "시간 요소 인터페이스",
-                )[1];
-                append(
-                    time,
-                    `${render.name}=${api}.time(${render.name},${jsx}.jsx);`,
-                );
+                wrap(time, render, `${api}.time`);
                 bindings.messageTime = [time.id, render.exportName];
             },
+            "chat",
         );
 
         module(
@@ -2688,9 +3047,10 @@
                         source.includes("readAccounts") &&
                         source.includes("queryClient.fetchQuery"),
                 );
-                append(
+                wrap(
                     accounts,
-                    `{const original=${readAccounts.name};${readAccounts.name}=async function(...args){const result=await original(...args),plan=${fakePlan};return plan?{...result,accounts:result.accounts.map(account=>({...account,plan_type:plan}))}:result}};`,
+                    readAccounts,
+                    `(original=>async function(...args){const result=await original(...args),plan=${fakePlan};return plan?{...result,accounts:result.accounts.map(account=>({...account,plan_type:plan}))}:result})`,
                 );
             },
         );
@@ -2729,9 +3089,10 @@
                     "계정 세션 인터페이스",
                     "getBrowserChatGptDocumentAuth",
                 );
-                append(
+                wrap(
                     auth,
-                    `{const original=${documentAuth.name};${documentAuth.name}=function(...args){const auth=original(...args),plan=${fakePlan};return !plan||auth==null?auth:{...auth,planType:plan,targetingAccount:auth.targetingAccount==null?auth.targetingAccount:{...auth.targetingAccount,planType:plan}}}};`,
+                    documentAuth,
+                    `(original=>function(...args){const auth=original(...args),plan=${fakePlan};return !plan||auth==null?auth:{...auth,planType:plan,targetingAccount:auth.targetingAccount==null?auth.targetingAccount:{...auth.targetingAccount,planType:plan}}})`,
                 );
             },
         );
@@ -2766,12 +3127,21 @@
         ];
     }
 
-    function getChatgptModuleItems() {
-        const items = ["런타임 모델 전환"];
-        if (chatgptCopyButtonEnabled) items.push("전체 대화 복사");
-        if (chatgptMessageInfoEnabled) items.push("시간 및 모델 표시");
-        if (chatgptApprovalEnabled) items.push("도구 요청 자동 승인");
-        if (chatgptAutoCollapseEnabled) items.push("분석 내용 자동 접기");
+    function getChatgptPage() {
+        const pathname = pageWindow.location.pathname;
+        if (pathname.startsWith("/dots/")) return "dot";
+        if (/^\/(?:c|share|g\/[^/]+\/(?:shared\/)?c)\//.test(pathname))
+            return "chat";
+    }
+
+    function getChatgptModuleItems(page) {
+        const items = ["런타임 모델 전환", "侧栏中键打开"];
+        if (page && chatgptCopyButtonEnabled) items.push("전체 대화 복사");
+        if (page === "chat") {
+            if (chatgptMessageInfoEnabled) items.push("시간 및 모델 표시");
+            if (chatgptApprovalEnabled) items.push("도구 요청 자동 승인");
+            if (chatgptAutoCollapseEnabled) items.push("분석 내용 자동 접기");
+        }
         if (chatgptFakePlanEnabled)
             items.push(`플랜 표시:${chatgptFakePlanValue}`);
         return items;
@@ -2793,7 +3163,7 @@
             await pageWindow.__checkerNextRuntimeModelBridge?.refreshAccounts();
             updateChatgptInjectionStatus();
         } catch (error) {
-            console.error("[CheckerNext] 플랜 설정 업데이트 실패:", error);
+            reportChatgptInjectionFailure(`更新会员设置失败：${error}`);
         }
     }
 
@@ -2941,6 +3311,12 @@
         console.error(`[CheckerNext] ${message}`);
     }
 
+    function reportChatgptInjectionFailure(error) {
+        chatgptInjectionFailure = String(error);
+        reportChatgptFailure(`모듈 주입 실패:${error}`);
+        updateChatgptInjectionStatus();
+    }
+
     function updateChatgptInjectionStatus() {
         if (!isChatgptMode) return;
         const status = document.getElementById("chatgpt-injection-status");
@@ -2949,12 +3325,18 @@
         );
         if (!status) return;
 
-        const items = getChatgptModuleItems()
+        const page = getChatgptPage();
+        const items = getChatgptModuleItems(page)
             .map((item) => `• ${item}`)
             .join("\n");
         let label = "불러오는 중";
         let color = "#bbbbbb";
         let description = "ChatGPT 페이지 모듈을 불러오는 중입니다.";
+        const pending = chatgptModuleEntries.filter(
+            (entry) =>
+                entry.id === undefined &&
+                (entry.page === undefined || entry.page === page),
+        );
         if (chatgptModuleInjectionEnabled !== chatgptModuleInjectionStarted) {
             label = "새로고침 후 적용";
             color = "#ffd700";
@@ -2968,10 +3350,12 @@
             label = "주입 실패";
             color = "#ff6b6b";
             description = chatgptInjectionFailure;
-        } else if (pageWindow.__checkerNextModulesInstalled) {
+        } else if (chatgptRuntimeReady && pending.length === 0) {
             label = "주입 성공";
             color = "#98fb98";
             description = `현재 페이지에 주입됨:\n${items}`;
+        } else if (pending.length) {
+            description = `正在加载：\n${pending.map((entry) => `• ${entry.label}`).join("\n")}`;
         }
         status.innerText = label;
         status.style.color = color;
@@ -3042,17 +3426,18 @@
             CHATGPT_RUNTIME_MODEL_STATE_EVENT,
             (event) => {
                 if (!event.detail || typeof event.detail !== "object") {
-                    reportChatgptFailure("ChatGPT 런타임 모델이 올바르지 않은 상태를 반환했습니다.");
+                    reportChatgptInjectionFailure(
+                        "ChatGPT 런타임 모델이 올바르지 않은 상태를 반환했습니다.",
+                    );
                     return;
                 }
                 chatgptRuntimeModelState = event.detail;
                 if (event.detail.error) {
-                    reportChatgptFailure(
+                    reportChatgptInjectionFailure(
                         `ChatGPT 런타임 모델 오류:${event.detail.error}`,
                     );
                 }
                 updateChatgptRuntimeModelControls();
-                syncChatgptCopyButton();
             },
         );
         pageWindow.addEventListener("load", updateChatgptInjectionStatus, {
@@ -3060,7 +3445,7 @@
         });
     }
 
-    function formatChatgptConversation(turns) {
+    function formatChatgptConversation(turns, conversationId) {
         const sections = [];
         let role;
         let text = "";
@@ -3073,6 +3458,7 @@
                 const messageText =
                     pageWindow.__checkerNextRuntimeModelBridge.getMessageText(
                         item,
+                        conversationId,
                     );
                 if (!messageText) continue;
                 const messageRole =
@@ -3087,15 +3473,11 @@
         return sections.join("\n\n========\n\n");
     }
 
-    function getDotConversation(roomId) {
-        const conversation =
-            pageWindow.__checkerNextRuntimeModelBridge?.dotConversation(roomId);
-        if (!conversation) throw new Error("Dots 메시지 상태가 아직 로드되지 않음");
-        return conversation;
-    }
-
-    function formatDotConversation(roomId) {
-        const { messages, room } = getDotConversation(roomId);
+    function formatDotConversation(controller) {
+        const { messages } = controller.services.conversations.get(
+            controller.roomId,
+        );
+        const { room } = controller.state.getSnapshot();
         const sections = messages
             .filter((message) => !message.deletedAt && message.text)
             .map((message) => {
@@ -3110,220 +3492,6 @@
             });
         if (!sections.length) throw new Error("대화에 복사할 본문이 없습니다.");
         return sections.join("\n\n========\n\n");
-    }
-
-    function setChatgptCopyButtonState(
-        button,
-        state,
-        sprite,
-        idleLabel = "전체 대화 복사",
-    ) {
-        const name =
-            state === "success"
-                ? "checkmark-lg-light"
-                : state === "error"
-                  ? "circle-exclamation-mark-light"
-                  : "square-on-square-light";
-        const targets = button.querySelectorAll("svg");
-        for (const target of targets) {
-            const size = target.viewBox.baseVal.width === 20 ? 20 : 16;
-            const use = document.createElementNS(
-                "http://www.w3.org/2000/svg",
-                "use",
-            );
-            use.setAttribute("href", `${sprite}#${name}-${size}`);
-            use.setAttribute("fill", "currentColor");
-            target.setAttribute("viewBox", `0 0 ${size} ${size}`);
-            target.replaceChildren(use);
-        }
-        const label =
-            state === "loading"
-                ? "복사 중"
-                : state === "success"
-                  ? "복사됨"
-                  : state === "error"
-                    ? "복사 실패"
-                    : idleLabel;
-        button.setAttribute("aria-label", label);
-        button.title = label;
-    }
-
-    function bindChatgptCopyButton(
-        button,
-        getText,
-        sprite,
-        label = "전체 대화 복사",
-    ) {
-        setChatgptCopyButtonState(button, "idle", sprite, label);
-        let copying = false;
-        let resetTimer;
-        const onClick = async (event) => {
-            event.stopPropagation();
-            if (copying) return;
-            copying = true;
-            setChatgptCopyButtonState(button, "loading", sprite, label);
-            try {
-                await pageWindow.navigator.clipboard.writeText(await getText());
-                setChatgptCopyButtonState(button, "success", sprite, label);
-            } catch (error) {
-                console.error("[CheckerNext] 복사 실패:", error);
-                setChatgptCopyButtonState(button, "error", sprite, label);
-            } finally {
-                copying = false;
-            }
-            resetTimer = setTimeout(
-                () => setChatgptCopyButtonState(button, "idle", sprite, label),
-                1000,
-            );
-        };
-        button.addEventListener("click", onClick);
-        return () => {
-            button.removeEventListener("click", onClick);
-            clearTimeout(resetTimer);
-        };
-    }
-
-    function syncDotCopyButton() {
-        const existing = document.getElementById(
-            "checker-next-copy-conversation-button",
-        );
-        if (!chatgptCopyButtonEnabled || !chatgptModuleInjectionStarted) {
-            existing?.remove();
-            return;
-        }
-
-        const pathname = pageWindow.location.pathname;
-        const roomId = document
-            .querySelector("article.message-row[data-message-id]")
-            ?.dataset.messageId?.split("~")[0];
-        if (
-            existing?.dataset.pathname === pathname &&
-            existing.dataset.roomId === roomId
-        )
-            return;
-        existing?.remove();
-        if (!roomId) return;
-        const more = [
-            ...document.querySelectorAll(
-                'header[data-app-shell-titlebar] [data-app-shell-main-titlebar] button[aria-haspopup="menu"]',
-            ),
-        ].find((button) =>
-            button.querySelector('use[href$="#ellipsis-horizontal-light-16"]'),
-        );
-        const sprite = more
-            ?.querySelector("svg use")
-            ?.getAttribute("href")
-            ?.split("#")[0];
-        if (!more || !sprite) return;
-        const button = more.cloneNode(true);
-        for (const name of [
-            "id",
-            "aria-haspopup",
-            "aria-expanded",
-            "data-state",
-        ])
-            button.removeAttribute(name);
-        button.id = "checker-next-copy-conversation-button";
-        button.dataset.pathname = pathname;
-        button.dataset.roomId = roomId;
-        bindChatgptCopyButton(
-            button,
-            () => formatDotConversation(roomId),
-            sprite,
-        );
-        more.after(button);
-    }
-
-    function syncChatgptCopyButton() {
-        const pathname = pageWindow.location.pathname;
-        if (/^\/dots\/[^/]+\/?$/.test(pathname)) {
-            syncDotCopyButton();
-            return;
-        }
-        let existing = document.getElementById(
-            "checker-next-copy-conversation-button",
-        );
-        if (existing && existing.dataset.pathname !== pathname) {
-            existing.remove();
-            existing = null;
-        }
-        const isConversationPath =
-            /^\/(?:c|share|g\/[^/]+\/(?:shared\/)?c)\/[^/]+$/.test(pathname);
-        if (!chatgptCopyButtonEnabled || !isConversationPath) {
-            existing?.remove();
-            if (chatgptCopyButtonEnabled && pathname.includes("/c/")) {
-                reportChatgptFailure(
-                    `ChatGPT 대화 경로를 인식하지 못해 복사 버튼을 삽입할 수 없습니다:${pathname}`,
-                );
-            }
-            return;
-        }
-        const runtimeReady =
-            chatgptModuleInjectionStarted &&
-            chatgptRuntimeModelState?.pathname === pathname;
-        if (!runtimeReady) {
-            existing?.remove();
-            return;
-        }
-        const ready = chatgptRuntimeModelState.copyReady;
-        if (
-            existing instanceof HTMLButtonElement &&
-            existing.dataset.pathname === pathname &&
-            existing.disabled === !ready
-        ) {
-            return;
-        }
-        if (existing instanceof HTMLButtonElement) {
-            existing.dataset.pathname = pathname;
-            existing.disabled = !ready;
-            return;
-        }
-
-        const nativeButton = [
-            ...document.querySelectorAll(
-                'header[data-app-shell-titlebar] button[aria-haspopup="menu"], header[data-app-shell-titlebar] button:has(use[href$="#bookmark-light-16"])',
-            ),
-        ].findLast((button) => !button.closest('[aria-hidden="true"]'));
-        const sprite = document
-            .querySelector('svg use[href*="/cdn/assets/icons-"]')
-            ?.getAttribute("href")
-            ?.split("#")[0];
-        if (!nativeButton || !sprite) return;
-
-        const button = nativeButton.cloneNode(true);
-        const nativeIcons = [
-            ...(button.lastElementChild?.querySelectorAll("svg") ?? []),
-        ];
-        if (
-            !(button instanceof HTMLButtonElement) ||
-            nativeIcons.length === 0
-        ) {
-            return;
-        }
-        button.id = "checker-next-copy-conversation-button";
-        button.type = "button";
-        button.dataset.pathname = pathname;
-        button.disabled = !ready;
-        bindChatgptCopyButton(
-            button,
-            () => {
-                const currentTurns =
-                    pageWindow.__checkerNextRuntimeModelBridge.getTurns(
-                        chatgptCopyDetailsEnabled,
-                    );
-                if (!Array.isArray(currentTurns)) {
-                    throw new Error("현재 대화가 아직 로드되지 않음");
-                }
-                return formatChatgptConversation(currentTurns);
-            },
-            sprite,
-        );
-        if (nativeButton.querySelector('use[href$="#bookmark-light-16"]')) {
-            button.classList.add("pointer-events-auto");
-            nativeButton.closest(".pointer-events-auto.flex").before(button);
-        } else {
-            nativeButton.before(button);
-        }
     }
 
     // 全局状态：记录弹窗是否正在显示
@@ -3415,7 +3583,7 @@
             <div style="margin-bottom: 2px;">
                 <strong>ChatGPT</strong>
             </div>
-            PoW 난이도:<span id="difficulty">...</span><span id="difficulty-level" style="margin-left: 3px"></span>
+            PoW 난이도:<button type="button" id="difficulty" aria-describedby="tooltip" style="border: 0; padding: 0; background: none; color: inherit; font: inherit; cursor: pointer;">${formatDifficulty(powDifficulty)}</button><span id="difficulty-level" style="margin-left: 3px"></span>
             <span id="difficulty-tooltip" style="
                 cursor: pointer;
                 color: #fff;
@@ -4180,7 +4348,7 @@
 
         const tooltip = createTooltip(
             "tooltip",
-            "이 값이 클수록 ChatGPT가 해당 IP를 더 낮은 위험으로 판단한다는 의미입니다.",
+            "这个数值越大，相当于 ChatGPT 认为你的 IP 风险越低。点击数值切换十六进制与十进制。",
         );
 
         // 创建 Codex 提示框
@@ -4361,7 +4529,6 @@
                 sliderDot,
                 chatgptModuleInjectionStarted && chatgptCopyButtonEnabled,
             );
-            syncChatgptCopyButton();
         }
 
         function bindChatgptCopyButtonToggle() {
@@ -4373,9 +4540,9 @@
             updateChatgptCopyButtonToggle();
             toggle.addEventListener("change", () => {
                 chatgptCopyButtonEnabled = toggle.checked;
-                chatgptDotCopyStyle.media = chatgptCopyButtonEnabled
-                    ? "not all"
-                    : "all";
+                pageWindow.dispatchEvent(
+                    new pageWindow.Event(CHATGPT_COPY_EVENT),
+                );
                 localStorage.setItem(
                     CHATGPT_COPY_BUTTON_ENABLED_KEY,
                     String(chatgptCopyButtonEnabled),
@@ -4517,6 +4684,12 @@
         }
 
         if (isChatgptMode) {
+            const difficultyElement = document.getElementById("difficulty");
+            difficultyElement.addEventListener("click", () => {
+                powRadix = powRadix === 10 ? 16 : 10;
+                localStorage.setItem(CHATGPT_POW_RADIX_KEY, String(powRadix));
+                difficultyElement.textContent = formatDifficulty(powDifficulty);
+            });
             bindToggle(
                 "chatgpt-module-injection",
                 chatgptModuleInjectionEnabled,
@@ -4604,7 +4777,6 @@
         if (!document.getElementById("checker-next-displayBox")) {
             createElements();
         }
-        if (isChatgptMode) syncChatgptCopyButton();
     });
 
     function startObserverWhenReady() {
@@ -4619,8 +4791,18 @@
     let powFetched = false;
     let codexFetched = false;
 
+    function formatDifficulty(difficulty) {
+        return difficulty === "..." || powRadix === 16
+            ? difficulty
+            : Number.parseInt(difficulty, 16).toString();
+    }
+
     // 更新difficulty指示器
     function updateDifficultyIndicator(difficulty) {
+        powDifficulty = difficulty;
+        const difficultyElement = document.getElementById("difficulty");
+        if (difficultyElement)
+            difficultyElement.textContent = formatDifficulty(difficulty);
         const difficultyLevel = document.getElementById("difficulty-level");
 
         if (difficulty === "...") {
@@ -5157,16 +5339,12 @@
                 const difficulty = data.proofofwork
                     ? data.proofofwork.difficulty
                     : "...";
-                const difficultyElement = document.getElementById("difficulty");
-                if (difficultyElement) difficultyElement.innerText = difficulty;
                 updatePersona(data.persona);
                 updateDifficultyIndicator(difficulty);
 
                 return;
             } catch (e) {
                 console.error("[CheckerNext] 챌린지 응답 처리 중 오류:", e);
-                const difficultyElement = document.getElementById("difficulty");
-                if (difficultyElement) difficultyElement.innerText = "...";
                 updateDifficultyIndicator("...");
                 return;
             }
