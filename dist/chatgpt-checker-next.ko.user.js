@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.4.1.0
+// @version      5.4.1.1
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -1952,12 +1952,12 @@
         );
 
         module(
-            "按钮组件模块",
+            "버튼 컴포넌트 모듈",
             (source) =>
                 source.includes("uniformAtMobile:") &&
                 source.includes("sizingLabels:"),
             (button) => {
-                const render = exported(button, "按钮组件", (source) =>
+                const render = exported(button, "버튼 컴포넌트", (source) =>
                     /^function(?: [\w$]+)?\([\w$]+\)\{let [^{}]*;return /.test(
                         source,
                     ),
@@ -1967,11 +1967,11 @@
         );
 
         module(
-            "图标组件模块",
+            "아이콘 컴포넌트 모듈",
             (source) =>
                 source.includes("icon16:") && source.includes(".CompactSource"),
             (icon) => {
-                const render = exported(icon, "图标组件", (source) =>
+                const render = exported(icon, "아이콘 컴포넌트", (source) =>
                     source.includes('"assets"in'),
                 );
                 bindings.icon = [icon.id, render.exportName];
@@ -1996,7 +1996,7 @@
                                 /[\w$]+\.([\w$]+)=\{kind:"sprite",name:/g,
                             ),
                         ],
-                        "图标资源",
+                        "아이콘 리소스",
                     );
                     bindings[name] = [icon.id, exportName];
                 },
@@ -2206,12 +2206,12 @@
         );
 
         module(
-            "会话页面模块",
+            "대화 페이지 모듈",
             (source) =>
                 source.includes("ChatGptConversationPage:") &&
                 source.includes("ChatGptSharedConversationPage:"),
             (page) => {
-                const view = exported(page, "会话页面", (source) =>
+                const view = exported(page, "대화 페이지", (source) =>
                     /\{[^{}]*\bisInlinePreview:[^{}]*\}=[\w$]+/.test(source),
                 );
                 const source = view.toString();
@@ -2225,7 +2225,7 @@
                             ].map((match) => match[1]),
                         ),
                     ],
-                    "会话服务端 ID",
+                    "대화 서버 ID",
                 );
                 const [, selector] = single(
                     [
@@ -2236,7 +2236,7 @@
                             ),
                         ),
                     ],
-                    "会话 ID 状态",
+                    "대화 ID 상태",
                 );
                 append(page, `${api}.register({serverId:${selector}});`);
                 wrap(page, view, `${api}.chatView`);
@@ -2288,7 +2288,7 @@
         );
 
         module(
-            "Dot 顶栏模块",
+            "Dot 상단 바 모듈",
             (source) => source.includes('actionId:"orbit-messaging-actions"'),
             (header) => {
                 const render = single(
@@ -2297,7 +2297,7 @@
                             /function ([\w$]+)\([\w$]+\)\{(?:(?!function [\w$]+\()[\s\S])*?actionId:"orbit-messaging-actions"/g,
                         ),
                     ],
-                    "Dot 顶栏",
+                    "Dot 상단 바",
                 )[1];
                 const menu = single(
                     [
@@ -2319,7 +2319,7 @@
                                 .map((match) => match[1]),
                         ),
                     ],
-                    "Dot 更多操作",
+                    "Dot 추가 작업",
                 );
                 append(
                     header,
@@ -2352,14 +2352,14 @@
         );
 
         module(
-            "页面布局模块",
+            "페이지 레이아웃 모듈",
             (source) =>
                 source.includes("HeaderAction:") &&
                 source.includes("HeaderToolbar:"),
             (shell) => {
                 const [exportName] = single(
                     Object.entries(getChatgptModuleExports(shell.source)),
-                    "页面布局接口",
+                    "페이지 레이아웃 인터페이스",
                 );
                 bindings.shell = [shell.id, exportName];
             },
@@ -2863,7 +2863,7 @@
         );
 
         module(
-            "授权组件模块",
+            "승인 컴포넌트 모듈",
             (source) =>
                 source.includes(".codex_mcp_elicitation?.kind") &&
                 source.includes("approveDisabled:") &&
@@ -3135,7 +3135,7 @@
     }
 
     function getChatgptModuleItems(page) {
-        const items = ["런타임 모델 전환", "侧栏中键打开"];
+        const items = ["런타임 모델 전환", "사이드바 가운데 클릭으로 새 탭 열기"];
         if (page && chatgptCopyButtonEnabled) items.push("전체 대화 복사");
         if (page === "chat") {
             if (chatgptMessageInfoEnabled) items.push("시간 및 모델 표시");
@@ -3163,7 +3163,7 @@
             await pageWindow.__checkerNextRuntimeModelBridge?.refreshAccounts();
             updateChatgptInjectionStatus();
         } catch (error) {
-            reportChatgptInjectionFailure(`更新会员设置失败：${error}`);
+            reportChatgptInjectionFailure(`플랜 설정 업데이트 실패:${error}`);
         }
     }
 
@@ -3355,7 +3355,7 @@
             color = "#98fb98";
             description = `현재 페이지에 주입됨:\n${items}`;
         } else if (pending.length) {
-            description = `正在加载：\n${pending.map((entry) => `• ${entry.label}`).join("\n")}`;
+            description = `불러오는 중:\n${pending.map((entry) => `• ${entry.label}`).join("\n")}`;
         }
         status.innerText = label;
         status.style.color = color;
@@ -4348,7 +4348,7 @@
 
         const tooltip = createTooltip(
             "tooltip",
-            "这个数值越大，相当于 ChatGPT 认为你的 IP 风险越低。点击数值切换十六进制与十进制。",
+            "값이 클수록 ChatGPT가 해당 IP의 위험을 낮게 평가한다는 의미입니다. 숫자를 클릭하면 16진수와 10진수 표시를 전환합니다.",
         );
 
         // 创建 Codex 提示框
