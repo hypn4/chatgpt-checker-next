@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.6.3.0
+// @version      5.6.3.1
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -47,10 +47,10 @@
     const CHATGPT_EARLY_ACTIONS_EVENT = "checker-next-early-actions";
     const CHATGPT_PASTE_MODE_KEY = "checker-next-chatgpt-paste-mode";
     const CHATGPT_PASTE_MODES = {
-        auto: "文本优先",
-        text: "仅文本",
-        file: "仅附件",
-        native: "原版",
+        auto: "텍스트 우선",
+        text: "텍스트만",
+        file: "첨부파일만",
+        native: "기존 방식",
     };
     const CHATGPT_APPROVAL_KEY = "checker-next-chatgpt-approval";
     const CHATGPT_APPROVAL_EVENT = "checker-next-approval";
@@ -126,7 +126,7 @@
         let runtime;
         const install = (require) => {
             if (typeof require.ir !== "function")
-                throw new Error("原生模块加载接口未找到");
+                throw new Error("네이티브 모듈 로딩 인터페이스를 찾을 수 없음");
             const { patches, bindings } = createChatgptModulePatches();
             const entries = patches.concat(createChatgptModuleData());
             installChatgptRuntimeBridge(require, bindings);
@@ -147,18 +147,18 @@
                     value,
                     pageWindow.location.href,
                 ).pathname.match(/\/(\d+)\.[^/]+\.js$/)?.[1];
-                if (!id) throw new Error(`原生模块资源标识未识别：${value}`);
+                if (!id) throw new Error(`네이티브 모듈 리소스 식별자를 인식하지 못함:${value}`);
                 return id;
             };
             const remember = (namespace) => {
                 if (!namespace?.__webpack_modules__) return;
                 try {
                     if (!Array.isArray(namespace.__rspack_esm_ids))
-                        throw new Error("原生模块资源标识未提供");
+                        throw new Error("네이티브 모듈 리소스 식별자가 제공되지 않음");
                     for (const id of namespace.__rspack_esm_ids)
                         chunks.set(String(id), namespace.__webpack_modules__);
                 } catch (error) {
-                    reportChatgptInjectionFailure(`原生模块登记失败：${error}`);
+                    reportChatgptInjectionFailure(`네이티브 모듈 등록 실패:${error}`);
                 }
             };
             const inspect = () => {
@@ -169,14 +169,14 @@
                 if (!ids?.length)
                     return {
                         delivered: false,
-                        pending: ["原生路由入口"],
+                        pending: ["네이티브 라우트 진입점"],
                         loading: [],
                         errors: [],
                     };
                 const files = new Set();
                 for (const id of ids) {
                     const route = manifest?.routes?.[id];
-                    if (!route) throw new Error(`原生路由定义未找到：${id}`);
+                    if (!route) throw new Error(`네이티브 라우트 정의를 찾을 수 없음:${id}`);
                     for (const file of [
                         route.module,
                         route.clientLoaderModule,
@@ -191,7 +191,7 @@
                 );
                 const errors = [...loadErrors]
                     .filter(([file]) => files.has(file))
-                    .map(([file, error]) => `${file} 加载失败：${error}`);
+                    .map(([file, error]) => `${file} 로드 실패:${error}`);
                 if (pending.length)
                     return { delivered: false, pending, loading, errors };
                 const candidates = new Set(bootstrap);
@@ -207,7 +207,7 @@
                 for (const id of ids) {
                     const modules = routes.get(id)?.__webpack_modules__;
                     if (!modules)
-                        throw new Error(`原生路由模块结构未识别：${id}`);
+                        throw new Error(`네이티브 라우팅 모듈 구조를 인식하지 못함:${id}`);
                     for (const key of Object.keys(modules)) candidates.add(key);
                 }
                 const page = getChatgptPage(router?.state.location.pathname);
@@ -219,7 +219,7 @@
                         entry.id === undefined ||
                         !candidates.has(entry.id)
                     )
-                        errors.push(`${entry.label}匹配到 0 个结果`);
+                        errors.push(`${entry.label}일치하는 결과 0개`);
                     else if (!entry.ready) pending.push(entry.label);
                 }
                 return { delivered: true, pending, loading, errors };
@@ -283,7 +283,7 @@
                 } catch (error) {
                     for (const entry of matched) {
                         entry.ready = false;
-                        entry.error = `${entry.label}挂接失败：${error}`;
+                        entry.error = `${entry.label}후킹 실패:${error}`;
                     }
                     processed.set(factory, factory);
                     schedule();
@@ -344,7 +344,7 @@
                         value = receive(next);
                     } catch (error) {
                         reportChatgptInjectionFailure(
-                            `原生入口接入失败：${name}：${error}`,
+                            `네이티브 진입점 연결 실패:${name}：${error}`,
                         );
                     }
                     schedule();
@@ -2676,7 +2676,7 @@
                             "onFork:",
                         ].every((property) => props.includes(property)),
                     ),
-                    "会话轮次调用",
+                    "대화 턴 호출",
                 );
                 replace(
                     page,
@@ -2881,7 +2881,7 @@
                     "응답 상태 인터페이스",
                 );
                 bindings.status = [imports[status[1]], status[2]];
-                const actions = exported(content, "轮次操作栏条件", (source) =>
+                const actions = exported(content, "턴 액션 바 조건", (source) =>
                     source.includes(".suppressTurnActions"),
                 );
                 const [state] = single(
@@ -2890,7 +2890,7 @@
                             .toString()
                             .matchAll(/"in_progress"!==[\w$]+\.status/g),
                     ],
-                    "轮次生成状态",
+                    "턴 생성 상태",
                 );
                 replace(
                     content,
@@ -3354,7 +3354,7 @@
         );
 
         module(
-            "消息复制模块",
+            "메시지 복사 모듈",
             (source) =>
                 source.includes(
                     '.getAttribute("data-chatgpt-copy-reference")',
@@ -3448,7 +3448,7 @@
                 const actions = { source: actionsSource };
                 const [, item] = single(
                     [...actions.source.matchAll(/assistantItem:([\w$]+)/g)],
-                    "助手消息参数",
+                    "어시스턴트 메시지 매개변수",
                 );
                 const [copyCall, copyText] = single(
                     [
@@ -3459,7 +3459,7 @@
                             ),
                         ),
                     ],
-                    "原生消息复制调用",
+                    "네이티브 메시지 복사 호출",
                 );
                 const [, canCopy, text] = single(
                     [
@@ -3467,7 +3467,7 @@
                             /copyText:([\w$]+)\?([\w$]+):void 0/g,
                         ),
                     ],
-                    "消息复制状态",
+                    "메시지 복사 상태",
                 );
                 const [rowCall, actionRow] = single(
                     [
@@ -3475,7 +3475,7 @@
                             /\(0,[\w$]+\.(?:jsx|jsxs)\)\(([\w$.]+),\{actionRowRef:/g,
                         ),
                     ],
-                    "操作栏组件",
+                    "액션 바 컴포넌트",
                 );
                 replace(
                     actions,
@@ -3494,11 +3494,11 @@
                             ),
                         ),
                     ],
-                    "复制按钮可用状态",
+                    "복사 버튼 사용 가능 상태",
                 );
                 const [, image, ready] = single(
                     [...available.matchAll(/^null==([\w$]+)&&([\w$]+)$/g)],
-                    "复制按钮内容",
+                    "복사 버튼 콘텐츠",
                 );
                 replace(
                     actions,
@@ -3507,7 +3507,7 @@
                 );
                 replace(actions, copyCall, `${copyText}(${item})`);
                 replace(messages, actionsSource, actions.source);
-                const renderTurn = declared(messages, "会话轮次", (source) =>
+                const renderTurn = declared(messages, "대화 턴", (source) =>
                     source.includes(`(${renderActions},{`),
                 );
                 const turn = declarations(messages)[renderTurn].toString();
@@ -3517,7 +3517,7 @@
                             /favoriteSourceMessageIds:([\w$]+)\.messageIds/g,
                         ),
                     ],
-                    "轮次消息来源",
+                    "턴 메시지 출처",
                 );
                 const [condition, check] = single(
                     [
@@ -3528,15 +3528,15 @@
                             ),
                         ),
                     ],
-                    "轮次操作栏条件",
+                    "턴 액션 바 조건",
                 );
                 const [, assistant] = single(
                     [...turn.matchAll(/assistantItem:([^,}]+)/g)],
-                    "轮次助手消息",
+                    "턴 어시스턴트 메시지",
                 );
                 const [, images] = single(
                     [...turn.matchAll(/imageItems:([\w$]+)/g)],
-                    "轮次图片",
+                    "턴 이미지",
                 );
                 replace(
                     messages,
@@ -3547,12 +3547,12 @@
                     messages,
                     `${api}.register({actionRow:${actionRow}});${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
                 );
-                const menu = declared(messages, "消息菜单", (source) =>
+                const menu = declared(messages, "메시지 메뉴", (source) =>
                     source.includes(
                         'id:"chatgptConversations.messageActions.more"',
                     ),
                 );
-                const branch = declared(messages, "分支菜单", (source) =>
+                const branch = declared(messages, "분기 메뉴", (source) =>
                     source.includes(
                         'id:"chatgptConversations.messageActions.branchInNewChat"',
                     ),
@@ -3625,7 +3625,7 @@
         );
 
         module(
-            "输入长度模块",
+            "입력 길이 모듈",
             (source) =>
                 source.includes("isPromptTooLong:") &&
                 source.includes(".view.state.doc.content.size"),
@@ -3636,7 +3636,7 @@
                             /(\(0,[\w$]+\.[\w$]+\)|[\w$]+)\(([\w$]+),([\w$]+)\.view\.state\.doc\.content\.size\)/g,
                         ),
                     ],
-                    "输入长度判断",
+                    "입력 길이 판정",
                 );
                 replace(
                     composer,
@@ -3652,14 +3652,14 @@
         );
 
         module(
-            "文本粘贴模块",
+            "텍스트 붙여넣기 모듈",
             (source) =>
                 source.includes("handlePaste(") &&
                 source.includes('emit("pasted-text",'),
             (editor) => {
                 const [handler, args] = single(
                     [...editor.source.matchAll(/handlePaste\(([\w$,]+)\)\{/g)],
-                    "粘贴处理入口",
+                    "붙여넣기 처리 진입점",
                 );
                 const view = args.split(",")[0];
                 replace(
@@ -3674,7 +3674,7 @@
                             /(Math\.max\([\w$]+\.length,[\w$]+\?\.length\?\?0\))>=([\w$]+\.[\w$]+)(?=&&[\w$]+\.emit\("pasted-text",)/g,
                         ),
                     ],
-                    "粘贴文本长度",
+                    "붙여넣을 텍스트 길이",
                 );
                 replace(
                     editor,
@@ -3686,12 +3686,12 @@
         );
 
         module(
-            "粘贴附件模块",
+            "첨부파일 붙여넣기 모듈",
             (source) =>
                 source.includes("chatgptConversations.bigPaste.fileName") &&
                 source.includes("addPastedTextHandler"),
             (composer) => {
-                const name = declared(composer, "粘贴附件处理", (source) =>
+                const name = declared(composer, "첨부파일 붙여넣기 처리", (source) =>
                     source.includes("chatgptConversations.bigPaste.fileName"),
                 );
                 const source = declarations(composer)[name].toString();
@@ -3702,7 +3702,7 @@
                             /\{text:[\w$]+,markdown:[\w$]+,codeBlockLanguage:[\w$]+\}=([\w$]+)/g,
                         ),
                     ],
-                    "粘贴文本参数",
+                    "붙여넣기 텍스트 매개변수",
                 );
                 const [condition, threshold, size] = single(
                     [
@@ -3710,7 +3710,7 @@
                             /null!=([\w$]+)&&\(\1<=0\|\|([\w$]+)<\1\)/g,
                         ),
                     ],
-                    "粘贴附件长度",
+                    "붙여넣기 첨부파일 길이",
                 );
                 const effective = `${api}.pasteThreshold(${event},${threshold})`;
                 replace(
@@ -3727,7 +3727,7 @@
                             ),
                         ),
                     ],
-                    "粘贴附件起始长度",
+                    "붙여넣기 첨부파일 초기 길이",
                 );
                 replace(
                     paste,
@@ -3741,7 +3741,7 @@
                             /([\w$]+)\.addPastedTextHandler\(([\w$]+)\)/g,
                         ),
                     ],
-                    "粘贴附件监听",
+                    "첨부파일 붙여넣기 감지",
                 );
                 const [callback, argument] = single(
                     [
@@ -3752,7 +3752,7 @@
                             ),
                         ),
                     ],
-                    "粘贴附件回调",
+                    "첨부파일 붙여넣기 콜백",
                 );
                 replace(
                     paste,
@@ -3775,7 +3775,7 @@
                             /text:(\(0,[\w$]+\.[\w$]+\)\(([\w$]+)\.length\))\?\2:void 0/g,
                         ),
                     ],
-                    "粘贴文本回填",
+                    "붙여넣기 텍스트 반영",
                 );
                 replace(
                     paste,
@@ -3867,13 +3867,13 @@
 
     function getChatgptModuleItems(page) {
         const items = ["런타임 모델 전환"];
-        if (chatgptNewTabEnabled) items.push("中键新标签页打开");
+        if (chatgptNewTabEnabled) items.push("가운데 클릭으로 새 탭 열기");
         if (page && chatgptCopyButtonEnabled) items.push("전체 대화 복사");
         if (page !== "dot" && chatgptPasteMode !== "native")
-            items.push(`文本粘贴：${CHATGPT_PASTE_MODES[chatgptPasteMode]}`);
+            items.push(`텍스트 붙여넣기:${CHATGPT_PASTE_MODES[chatgptPasteMode]}`);
         if (page === "chat") {
             if (chatgptMessageInfoEnabled) items.push("시간 및 모델 표시");
-            if (chatgptEarlyActionsEnabled) items.push("提前显示操作栏");
+            if (chatgptEarlyActionsEnabled) items.push("액션 바 미리 표시");
             if (chatgptApprovalEnabled) items.push("도구 요청 자동 승인");
             if (chatgptAutoCollapseEnabled) items.push("분석 내용 자동 접기");
         }
@@ -4070,14 +4070,14 @@
             ...(state?.errors ?? []),
         ];
         const loading = state?.loading ?? [];
-        const pending = state?.pending ?? ["原生路由入口"];
+        const pending = state?.pending ?? ["네이티브 라우트 진입점"];
         const refresh =
             chatgptModuleInjectionEnabled !== chatgptModuleInjectionStarted
                 ? chatgptModuleInjectionEnabled
                     ? `페이지를 새로고침하면 모듈 주입이 활성화됩니다:\n${items}`
                     : "페이지를 새로고침하면 모듈 주입이 비활성화됩니다."
                 : null;
-        let label = "未完成";
+        let label = "미완료";
         let color = "#bbbbbb";
         if (errors.length) {
             label = "주입 실패";
@@ -4103,7 +4103,7 @@
                 );
             if (pending.length)
                 description.push(
-                    `待接入：\n${pending.map((item) => `• ${item}`).join("\n")}`,
+                    `연결 대기:\n${pending.map((item) => `• ${item}`).join("\n")}`,
                 );
             if (label === "주입 성공")
                 description.push(`현재 페이지에 주입됨:\n${items}`);
@@ -4525,7 +4525,7 @@
                 </label>
             </div>
             <div id="chatgpt-paste-mode-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <label for="chatgpt-paste-mode-select">文本粘贴
+                <label for="chatgpt-paste-mode-select">텍스트 붙여넣기
                 <span id="chatgpt-paste-mode-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -4723,7 +4723,7 @@
                 </label>
             </div>
             <div id="chatgpt-early-actions-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>提前显示操作栏
+                <span>액션 바 미리 표시
                 <span id="chatgpt-early-actions-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -4846,7 +4846,7 @@
                 </label>
             </div>
             <div id="chatgpt-new-tab-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>中键新标签页打开
+                <span>가운데 클릭으로 새 탭 열기
                 <span id="chatgpt-new-tab-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -5267,11 +5267,11 @@
 
         const chatgptEarlyActionsTooltipBox = createTooltip(
             "chatgpt-early-actions-tooltip-box",
-            "思考中提前显示消息底部的操作栏。",
+            "추론 중에도 메시지 하단의 액션 바를 미리 표시합니다.",
         );
         const chatgptPasteModeTooltipBox = createTooltip(
             "chatgpt-paste-mode-tooltip-box",
-            "文本优先：超出模型长度才转为附件。\n仅文本：无论如何都粘贴为文本。\n仅附件：粘贴文本都转附件上传。\n原版：按字数自动决定转为附件。",
+            "텍스트 우선: 모델의 길이 제한을 초과할 때만 첨부파일로 전환합니다.\n텍스트만: 길이에 관계없이 텍스트로 붙여넣습니다.\n첨부파일만: 붙여넣은 텍스트를 모두 첨부파일로 업로드합니다.\n기존 방식: 글자 수에 따라 첨부파일로 전환할지 자동으로 결정합니다.",
         );
 
         const chatgptApprovalTooltipBox = createTooltip(
@@ -5286,7 +5286,7 @@
 
         const chatgptNewTabTooltipBox = createTooltip(
             "chatgpt-new-tab-tooltip-box",
-            "让侧栏和分支菜单支持中键和 Ctrl+单击。",
+            "사이드바와 분기 메뉴에서 가운데 클릭 또는 Ctrl+클릭으로 새 탭을 엽니다.",
         );
 
         const chatgptSelectionPopoverTooltipBox = createTooltip(
