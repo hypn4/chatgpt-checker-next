@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.5.0.0
+// @version      5.6.3.0
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -34,6 +34,8 @@
         "checker-next-chatgpt-fake-plan-enabled";
     const CHATGPT_MODULE_INJECTION_ENABLED_KEY =
         "checker-next-chatgpt-module-injection-enabled";
+    const CHATGPT_NEW_TAB_KEY = "checker-next-chatgpt-new-tab";
+    const CHATGPT_NEW_TAB_EVENT = "checker-next-new-tab";
     const CHATGPT_COPY_BUTTON_ENABLED_KEY =
         "checker-next-chatgpt-copy-button-enabled";
     const CHATGPT_COPY_DETAILS_KEY = "checker-next-chatgpt-copy-details";
@@ -41,6 +43,15 @@
     const CHATGPT_COPY_EVENT = "checker-next-copy";
     const CHATGPT_MESSAGE_INFO_KEY = "checker-next-chatgpt-message-info";
     const CHATGPT_MESSAGE_INFO_EVENT = "checker-next-message-info";
+    const CHATGPT_EARLY_ACTIONS_KEY = "checker-next-chatgpt-early-actions";
+    const CHATGPT_EARLY_ACTIONS_EVENT = "checker-next-early-actions";
+    const CHATGPT_PASTE_MODE_KEY = "checker-next-chatgpt-paste-mode";
+    const CHATGPT_PASTE_MODES = {
+        auto: "文本优先",
+        text: "仅文本",
+        file: "仅附件",
+        native: "原版",
+    };
     const CHATGPT_APPROVAL_KEY = "checker-next-chatgpt-approval";
     const CHATGPT_APPROVAL_EVENT = "checker-next-approval";
     const CHATGPT_AUTO_COLLAPSE_KEY = "checker-next-chatgpt-auto-collapse";
@@ -60,6 +71,8 @@
     let chatgptModuleInjectionEnabled =
         isChatgptMode &&
         localStorage.getItem(CHATGPT_MODULE_INJECTION_ENABLED_KEY) !== "false";
+    let chatgptNewTabEnabled =
+        isChatgptMode && localStorage.getItem(CHATGPT_NEW_TAB_KEY) !== "false";
     let chatgptCopyButtonEnabled =
         isChatgptMode &&
         localStorage.getItem(CHATGPT_COPY_BUTTON_ENABLED_KEY) !== "false";
@@ -71,6 +84,12 @@
     let chatgptMessageInfoEnabled =
         isChatgptMode &&
         localStorage.getItem(CHATGPT_MESSAGE_INFO_KEY) !== "false";
+    let chatgptEarlyActionsEnabled =
+        isChatgptMode &&
+        localStorage.getItem(CHATGPT_EARLY_ACTIONS_KEY) !== "false";
+    let chatgptPasteMode = localStorage.getItem(CHATGPT_PASTE_MODE_KEY);
+    if (!Object.hasOwn(CHATGPT_PASTE_MODES, chatgptPasteMode))
+        chatgptPasteMode = "auto";
     let chatgptApprovalEnabled =
         isChatgptMode && localStorage.getItem(CHATGPT_APPROVAL_KEY) !== "false";
     let chatgptAutoCollapseEnabled =
@@ -86,8 +105,7 @@
     let chatgptRuntimeEnvironmentState;
     let chatgptPlanTypes;
     let chatgptModuleInjectionStarted = false;
-    let chatgptModuleEntries = [];
-    let chatgptRuntimeReady = false;
+    let chatgptModuleState;
     let chatgptInjectionFailure;
     const chatgptReportedFailures = new Set();
 
@@ -107,49 +125,168 @@
         const original = prototype.call;
         let runtime;
         const install = (require) => {
+            if (typeof require.ir !== "function")
+                throw new Error("原生模块加载接口未找到");
             const { patches, bindings } = createChatgptModulePatches();
             const entries = patches.concat(createChatgptModuleData());
-            chatgptModuleEntries = entries;
             installChatgptRuntimeBridge(require, bindings);
             const processed = new WeakMap();
+            const bootstrap = new Set(Object.keys(require.m));
+            const chunks = new Map();
+            const routes = new Map();
+            const loads = new Map();
+            const loadErrors = new Map();
+            let initialRoutes,
+                router,
+                stopRouter,
+                scheduled = false;
+            const url = (value) =>
+                new URL(value, pageWindow.location.href).href;
+            const assetId = (value) => {
+                const id = new URL(
+                    value,
+                    pageWindow.location.href,
+                ).pathname.match(/\/(\d+)\.[^/]+\.js$/)?.[1];
+                if (!id) throw new Error(`原生模块资源标识未识别：${value}`);
+                return id;
+            };
+            const remember = (namespace) => {
+                if (!namespace?.__webpack_modules__) return;
+                try {
+                    if (!Array.isArray(namespace.__rspack_esm_ids))
+                        throw new Error("原生模块资源标识未提供");
+                    for (const id of namespace.__rspack_esm_ids)
+                        chunks.set(String(id), namespace.__webpack_modules__);
+                } catch (error) {
+                    reportChatgptInjectionFailure(`原生模块登记失败：${error}`);
+                }
+            };
+            const inspect = () => {
+                const manifest = pageWindow.__reactRouterManifest;
+                const ids =
+                    router?.state.matches.map(({ route }) => route.id) ??
+                    initialRoutes;
+                if (!ids?.length)
+                    return {
+                        delivered: false,
+                        pending: ["原生路由入口"],
+                        loading: [],
+                        errors: [],
+                    };
+                const files = new Set();
+                for (const id of ids) {
+                    const route = manifest?.routes?.[id];
+                    if (!route) throw new Error(`原生路由定义未找到：${id}`);
+                    for (const file of [
+                        route.module,
+                        route.clientLoaderModule,
+                        route.clientActionModule,
+                        ...(route.imports ?? []),
+                    ])
+                        if (file) files.add(url(file));
+                }
+                const pending = ids.filter((id) => !routes.has(id));
+                const loading = [...loads.keys()].filter((file) =>
+                    files.has(file),
+                );
+                const errors = [...loadErrors]
+                    .filter(([file]) => files.has(file))
+                    .map(([file, error]) => `${file} 加载失败：${error}`);
+                if (pending.length)
+                    return { delivered: false, pending, loading, errors };
+                const candidates = new Set(bootstrap);
+                // 入口清单首项是运行时，其余资源通过 C 登记模块。
+                const runtimeUrl = url(manifest.entry.imports[0]);
+                for (const file of files) {
+                    if (file === runtimeUrl) continue;
+                    for (const id of Object.keys(
+                        chunks.get(assetId(file)) ?? {},
+                    ))
+                        candidates.add(id);
+                }
+                for (const id of ids) {
+                    const modules = routes.get(id)?.__webpack_modules__;
+                    if (!modules)
+                        throw new Error(`原生路由模块结构未识别：${id}`);
+                    for (const key of Object.keys(modules)) candidates.add(key);
+                }
+                const page = getChatgptPage(router?.state.location.pathname);
+                for (const entry of entries) {
+                    if (entry.page !== undefined && entry.page !== page)
+                        continue;
+                    if (entry.error) errors.push(entry.error);
+                    else if (
+                        entry.id === undefined ||
+                        !candidates.has(entry.id)
+                    )
+                        errors.push(`${entry.label}匹配到 0 个结果`);
+                    else if (!entry.ready) pending.push(entry.label);
+                }
+                return { delivered: true, pending, loading, errors };
+            };
+            const publish = () => {
+                scheduled = false;
+                try {
+                    chatgptModuleState = inspect();
+                } catch (error) {
+                    chatgptModuleState = {
+                        delivered: true,
+                        pending: [],
+                        loading: [],
+                        errors: [String(error)],
+                    };
+                }
+                for (const error of chatgptModuleState.errors)
+                    reportChatgptFailure(`모듈 주입 실패:${error}`);
+                updateChatgptInjectionStatus();
+            };
+            const schedule = () => {
+                if (scheduled) return;
+                scheduled = true;
+                queueMicrotask(publish);
+            };
             const patch = (id, factory) => {
                 if (processed.has(factory)) return processed.get(factory);
                 const source = factory.toString();
                 const target = { id, source };
-                let matched = false;
+                const matched = entries.filter((entry) =>
+                    entry.predicate(source),
+                );
                 try {
-                    for (const entry of entries) {
-                        if (!entry.predicate(source)) continue;
-                        matched = true;
+                    for (const entry of matched) {
                         if (entry.id !== undefined && entry.id !== id)
                             throw new Error(`${entry.label}여러 모듈이 일치함`);
-                        if (entry.read) {
-                            if (entry.id === undefined) {
-                                queueMicrotask(() => {
-                                    try {
-                                        entry.read(require(id));
-                                    } catch (error) {
-                                        reportChatgptInjectionFailure(
-                                            `읽기(${entry.label}) 실패: ${error}`,
-                                        );
-                                    }
-                                });
-                            }
-                        } else {
-                            entry.apply(target);
-                        }
-                        entry.id = id;
+                        entry.apply?.(target);
                     }
                     const result =
                         target.source === source
                             ? factory
                             : compileChatgptModule(target.source);
                     processed.set(factory, result);
-                    if (matched) queueMicrotask(updateChatgptInjectionStatus);
+                    for (const entry of matched) {
+                        entry.id = id;
+                        entry.error = undefined;
+                        entry.ready = !entry.read;
+                        if (entry.read)
+                            queueMicrotask(() => {
+                                try {
+                                    entry.read(require(id));
+                                    entry.ready = true;
+                                } catch (error) {
+                                    entry.error = `읽기(${entry.label}) 실패: ${error}`;
+                                }
+                                schedule();
+                            });
+                    }
+                    if (matched.length) schedule();
                     return result;
                 } catch (error) {
-                    reportChatgptInjectionFailure(error);
+                    for (const entry of matched) {
+                        entry.ready = false;
+                        entry.error = `${entry.label}挂接失败：${error}`;
+                    }
                     processed.set(factory, factory);
+                    schedule();
                     return factory;
                 }
             };
@@ -161,6 +298,90 @@
                     return true;
                 },
             });
+            const register = require.C;
+            require.C = function (namespace) {
+                const result = register.call(this, namespace);
+                remember(namespace);
+                return result;
+            };
+            const importModule = require.ir;
+            require.ir = function (resource) {
+                const promise = importModule.call(this, resource);
+                const manifest = pageWindow.__reactRouterManifest;
+                const file = new URL(
+                    resource,
+                    manifest
+                        ? url(manifest.entry.imports[0])
+                        : pageWindow.location.href,
+                ).href;
+                loads.set(file, promise);
+                loadErrors.delete(file);
+                schedule();
+                promise.then(
+                    (namespace) => {
+                        remember(namespace);
+                        if (loads.get(file) === promise) {
+                            loads.delete(file);
+                            loadErrors.delete(file);
+                        }
+                        schedule();
+                    },
+                    (error) => {
+                        if (loads.get(file) === promise) {
+                            loads.delete(file);
+                            loadErrors.set(file, String(error));
+                        }
+                        schedule();
+                    },
+                );
+                return promise;
+            };
+            const observe = (name, receive) => {
+                let value;
+                const set = (next) => {
+                    value = next;
+                    try {
+                        value = receive(next);
+                    } catch (error) {
+                        reportChatgptInjectionFailure(
+                            `原生入口接入失败：${name}：${error}`,
+                        );
+                    }
+                    schedule();
+                };
+                const current = pageWindow[name];
+                Object.defineProperty(pageWindow, name, {
+                    configurable: true,
+                    enumerable: true,
+                    get: () => value,
+                    set,
+                });
+                if (current !== undefined) set(current);
+            };
+            observe("__reactRouterRouteModules", (value) => {
+                initialRoutes = Object.keys(value);
+                routes.clear();
+                for (const [id, namespace] of Object.entries(value)) {
+                    remember(namespace);
+                    routes.set(id, namespace);
+                }
+                return new Proxy(value, {
+                    set(target, id, namespace) {
+                        target[id] = namespace;
+                        remember(namespace);
+                        routes.set(id, namespace);
+                        schedule();
+                        return true;
+                    },
+                });
+            });
+            observe("__reactRouterDataRouter", (value) => {
+                stopRouter?.();
+                router = value;
+                stopRouter = router.subscribe(schedule);
+                return value;
+            });
+            schedule();
         };
         const hook = new Proxy(original, {
             apply(target, factory, args) {
@@ -201,6 +422,8 @@
         const origins = new Map();
         const customModels = new Map();
         const controls = new Set();
+        const composers = new WeakMap();
+        const pasteModes = new WeakMap();
         const native = new Proxy(
             {},
             {
@@ -226,13 +449,53 @@
                     control.route.pathname === location.pathname &&
                     (control.route.search ?? "") === location.search,
             );
+        const composerState = (view) => {
+            let state = composers.get(view);
+            if (!state) {
+                state = {};
+                composers.set(view, state);
+            }
+            return state;
+        };
+        const pasteThreshold = (mode, threshold) => {
+            if (mode === "text") return Infinity;
+            if (mode === "auto" || mode === "file") return 1;
+            return threshold;
+        };
         const report = reportChatgptInjectionFailure;
+        const subscribeNewTab = (listener) => {
+            pageWindow.addEventListener(CHATGPT_NEW_TAB_EVENT, listener);
+            return () =>
+                pageWindow.removeEventListener(CHATGPT_NEW_TAB_EVENT, listener);
+        };
+        const getNewTabEnabled = () => chatgptNewTabEnabled;
+        const useNewTab = () =>
+            native.useSyncExternalStore(
+                subscribeNewTab,
+                getNewTabEnabled,
+                getNewTabEnabled,
+            );
         const subscribeCopy = (listener) => {
             pageWindow.addEventListener(CHATGPT_COPY_EVENT, listener);
             return () =>
                 pageWindow.removeEventListener(CHATGPT_COPY_EVENT, listener);
         };
         const getCopyEnabled = () => chatgptCopyButtonEnabled;
+        const subscribeEarlyActions = (listener) => {
+            pageWindow.addEventListener(CHATGPT_EARLY_ACTIONS_EVENT, listener);
+            return () =>
+                pageWindow.removeEventListener(
+                    CHATGPT_EARLY_ACTIONS_EVENT,
+                    listener,
+                );
+        };
+        const getEarlyActionsEnabled = () => chatgptEarlyActionsEnabled;
+        const useEarlyActions = () =>
+            native.useSyncExternalStore(
+                subscribeEarlyActions,
+                getEarlyActionsEnabled,
+                getEarlyActionsEnabled,
+            );
         const subscribeAutoCollapse = (listener) => {
             pageWindow.addEventListener(CHATGPT_AUTO_COLLAPSE_EVENT, listener);
             return () =>
@@ -751,6 +1014,7 @@
                 getText: () => formatDotConversation(controller),
             });
         }
+        let AssistantInfo;
         const bridge = {
             register(values) {
                 Object.assign(native, values);
@@ -780,7 +1044,8 @@
             },
             sidebarNav(fn) {
                 return function (props) {
-                    const to = sidebarHref(props);
+                    const enabled = useNewTab();
+                    const to = enabled ? sidebarHref(props) : undefined;
                     return native.createElement(
                         fn,
                         to && !props.to && !props.disabled
@@ -797,8 +1062,9 @@
             },
             sidebarButton(fn) {
                 return function (props) {
+                    const enabled = useNewTab();
                     const button = fn(props);
-                    const href = sidebarHref(props);
+                    const href = enabled ? sidebarHref(props) : undefined;
                     if (!href || button.props.disabled) return button;
                     const { type, disabled, onClick, ...attributes } =
                         button.props;
@@ -811,7 +1077,8 @@
             },
             sidebarRow(fn) {
                 return function (props) {
-                    const href = sidebarHref(props);
+                    const enabled = useNewTab();
+                    const href = enabled ? sidebarHref(props) : undefined;
                     if (!href || props.hasNavigationLink || props.isDisabled)
                         return native.createElement(fn, props);
                     const [content, ...actions] = props.children;
@@ -843,10 +1110,6 @@
                 return after(fn, (_, scope) => {
                     if (scope.scope.__scopeBrand === "AppScope") {
                         appScope = scope;
-                        if (!chatgptRuntimeReady) {
-                            chatgptRuntimeReady = true;
-                            queueMicrotask(updateChatgptInjectionStatus);
-                        }
                         queueMicrotask(watchEnvironment);
                     }
                     if (
@@ -1105,6 +1368,7 @@
                                   ...props,
                                   allowCollapseBeforeFinal: true,
                                   preventAutoCollapse: false,
+                                  waitForToolIconExit: false,
                                   forceExpanded: false,
                                   disableCollapse: false,
                               }
@@ -1112,19 +1376,173 @@
                     );
                 };
             },
-            turns(fn) {
-                return after(fn, ([props]) => {
-                    const conversation = {
-                        id: props.conversationId,
-                        isWorkConversation: props.isWorkConversation,
-                        copyReady: props.renderedTurns.length > 0,
-                        turns:
-                            props.isReadOnly || props.isTemporaryChat
-                                ? props.renderedTurns
-                                : undefined,
+            turns(fn, props) {
+                const result = fn(props);
+                const conversation = {
+                    id: props.conversationId,
+                    isWorkConversation: props.isWorkConversation,
+                    copyReady: props.renderedTurns.length > 0,
+                    turns:
+                        props.isReadOnly || props.isTemporaryChat
+                            ? props.renderedTurns
+                            : undefined,
+                };
+                conversations.set(conversation.id, conversation);
+                return result;
+            },
+            earlyActionsEnabled: getEarlyActionsEnabled,
+            promptLimit(controller, limit) {
+                composerState(controller.view).limit = limit;
+                return limit;
+            },
+            pasteMode: (event) => pasteModes.get(event) ?? "native",
+            pasteThreshold: (event, threshold) =>
+                pasteThreshold(bridge.pasteMode(event), threshold),
+            clipboardThreshold: (view, threshold) =>
+                pasteThreshold(composers.get(view)?.paste?.mode, threshold),
+            paste(fn) {
+                return function (view, ...args) {
+                    const state = composers.get(view);
+                    if (!state?.handler || chatgptPasteMode === "native")
+                        return fn.call(this, view, ...args);
+                    const paste = { mode: chatgptPasteMode, upload: null };
+                    const dispatch = view.dispatch;
+                    state.paste = paste;
+                    view.dispatch = (transaction) => {
+                        if (paste.upload && transaction.docChanged) {
+                            const upload = paste.upload;
+                            paste.upload = null;
+                            if (
+                                native.isPromptTooLong(
+                                    state.limit,
+                                    transaction.doc.content.size,
+                                ) &&
+                                upload()
+                            )
+                                return;
+                        }
+                        dispatch(transaction);
                     };
-                    conversations.set(conversation.id, conversation);
+                    try {
+                        return fn.call(this, view, ...args);
+                    } finally {
+                        delete state.paste;
+                        view.dispatch = dispatch;
+                    }
+                };
+            },
+            pasteHandler(controller, fn) {
+                const state = composerState(controller.view);
+                const handler = (event) => {
+                    const paste = state.paste;
+                    if (!paste) return fn(event);
+                    pasteModes.set(event, paste.mode);
+                    if (paste.mode === "auto") {
+                        paste.upload = () => fn(event);
+                        return false;
+                    }
+                    return fn(event);
+                };
+                state.handler = handler;
+                return handler;
+            },
+            removePasteHandler(controller, handler) {
+                controller.removePastedTextHandler(handler);
+                const state = composers.get(controller.view);
+                if (state?.handler === handler) delete state.handler;
+            },
+            messageActions(fn) {
+                return function (props) {
+                    useEarlyActions();
+                    return fn(props);
+                };
+            },
+            actionRow(props) {
+                const enabled = useEarlyActions();
+                return native.createElement(native.actionRow, {
+                    ...props,
+                    alwaysShowActions: props.alwaysShowActions || enabled,
                 });
+            },
+            turnActions(fn, actions) {
+                const containsActions = (node) =>
+                    node?.type === actions ||
+                    (node?.type === native.Fragment &&
+                        [node.props.children].flat().some(containsActions));
+                return bridge.messageActions(function (props) {
+                    const result = fn(props);
+                    if (
+                        !chatgptEarlyActionsEnabled ||
+                        !result ||
+                        props.turnActions !== undefined ||
+                        result.props.children.some(containsActions)
+                    )
+                        return result;
+                    return native.cloneElement(result, {
+                        children: [
+                            ...result.props.children,
+                            native.createElement(
+                                native.ErrorBoundary,
+                                { key: "message-info" },
+                                native.createElement(AssistantInfo, {
+                                    conversationId: props.conversationId,
+                                    messageIds: props.turn.messageIds,
+                                    standalone: true,
+                                }),
+                            ),
+                        ],
+                    });
+                });
+            },
+            hasMessageActions(item, images) {
+                return (
+                    chatgptEarlyActionsEnabled &&
+                    (item?.completed === true ||
+                        images.some((image) => image.src != null) ||
+                        native.messageText(item).trim().length > 0)
+                );
+            },
+            branchMenu(fn, branch) {
+                function Branch({ href, ...props }) {
+                    const result = branch(props);
+                    const link = (item) =>
+                        item?.props?.children?.props?.id?.endsWith(
+                            ".branchInNewChat",
+                        )
+                            ? native.cloneElement(item, {
+                                  href,
+                                  onClick: sidebarClick(item.props.onSelect),
+                                  onSelect: (event) => event.preventDefault(),
+                              })
+                            : item;
+                    return Array.isArray(result.props.children)
+                        ? native.cloneElement(result, {
+                              children: result.props.children.map(link),
+                          })
+                        : link(result);
+                }
+                return function (props) {
+                    const enabled = useNewTab();
+                    const result = fn(props);
+                    if (!enabled || !result || !props.messageId) return result;
+                    const id = appScope.get(
+                        native.serverId,
+                        props.conversationId,
+                    );
+                    if (!id) return result;
+                    const href = `/branch/${encodeURIComponent(id)}/${encodeURIComponent(props.messageId)}`;
+                    return native.cloneElement(result, {
+                        children: result.props.children.map((item) =>
+                            item?.type === branch
+                                ? native.createElement(Branch, {
+                                      ...item.props,
+                                      href,
+                                      key: item.key,
+                                  })
+                                : item,
+                        ),
+                    });
+                };
             },
             chatView(fn) {
                 return function (props) {
@@ -1222,10 +1640,22 @@
                     );
                     const snapshot = () => {
                         if (!chatgptMessageInfoEnabled) return null;
-                        const message = scope.get(
+                        const mapping = scope.get(
                             native.mapping,
                             conversationId,
-                        )?.[id]?.message;
+                        );
+                        const target =
+                            id ??
+                            props.messageIds?.findLast((id) => {
+                                const message = mapping?.[id]?.message;
+                                return (
+                                    message?.author.role === "assistant" &&
+                                    message.metadata
+                                        ?.is_visually_hidden_from_conversation !==
+                                        true
+                                );
+                            });
+                        const message = mapping?.[target]?.message;
                         const metadata = message?.metadata ?? {};
                         return JSON.stringify([
                             message?.create_time ?? null,
@@ -1252,7 +1682,7 @@
                     const [created, model, effort, requested] =
                         data === null ? [] : JSON.parse(data);
                     const time = created == null ? null : created * 1000;
-                    if (time === null && !model)
+                    if (time === null && !model && !effort)
                         return assistant
                             ? null
                             : native.createElement(fn, props);
@@ -1271,7 +1701,7 @@
                     ]
                         .filter(Boolean)
                         .join("\n");
-                    return native.createElement(
+                    const info = native.createElement(
                         "span",
                         {
                             className:
@@ -1301,7 +1731,16 @@
                                   title,
                               }),
                     );
+                    return props.standalone
+                        ? native.createElement(native.actionRow, {
+                              actionRowRef: props.actionRowRef,
+                              tooltipSide: "bottom",
+                              alwaysShowActions: true,
+                              beforeOverflowActions: info,
+                          })
+                        : info;
                 }
+                if (assistant) AssistantInfo = MessageInfo;
                 return function (props) {
                     if (assistant) {
                         const result = fn({
@@ -1315,6 +1754,8 @@
                                     null,
                                     native.createElement(MessageInfo, {
                                         conversationId: props.conversationId,
+                                        messageIds:
+                                            props.favoriteSourceMessageIds,
                                     }),
                                 ),
                             ),
@@ -1327,7 +1768,21 @@
                                     props.assistantItem?.latestMessageId ??
                                     props.assistantItem?.messageId,
                             },
-                            result,
+                            result ??
+                                (chatgptEarlyActionsEnabled
+                                    ? native.createElement(
+                                          native.ErrorBoundary,
+                                          null,
+                                          native.createElement(MessageInfo, {
+                                              conversationId:
+                                                  props.conversationId,
+                                              messageIds:
+                                                  props.favoriteSourceMessageIds,
+                                              actionRowRef: props.actionRowRef,
+                                              standalone: true,
+                                          }),
+                                      )
+                                    : null),
                         );
                     }
                     const message = native.createElement(fn, props);
@@ -1513,7 +1968,7 @@
                 }
                 return (
                     conversation.turns ??
-                    scope.get(native.turns, conversation.id)
+                    native.turns(scope.get, conversation.id)
                 );
             },
             getMessageText(item, conversationId) {
@@ -2201,20 +2656,6 @@
         });
 
         module(
-            "대화 렌더링 모듈",
-            (source) =>
-                source.includes('id:"pending-chatgpt-submit"') &&
-                source.includes("timestampSeparatorAtMs"),
-            (turns) => {
-                const renderTurns = exported(turns, "대화 콘텐츠 인터페이스", (source) =>
-                    source.includes("timestampSeparatorAtMs"),
-                );
-                wrap(turns, renderTurns, `${api}.turns`);
-            },
-            "chat",
-        );
-
-        module(
             "대화 페이지 모듈",
             (source) => source.includes("ChatGptConversationPage:"),
             (page) => {
@@ -2222,24 +2663,46 @@
                     /\{[^{}]*\bisInlinePreview:[^{}]*\}=[\w$]+/.test(source),
                 );
                 const source = view.toString();
-                const serverId = single(
-                    [
-                        ...new Set(
-                            [
-                                ...source.matchAll(
-                                    /serverConversationId:([\w$]+)/g,
-                                ),
-                            ].map((match) => match[1]),
-                        ),
-                    ],
-                    "대화 서버 ID",
-                );
-                const [, selector] = single(
+                const [turnCall, renderTurns] = single(
                     [
                         ...source.matchAll(
-                            new RegExp(
-                                `${RegExp.escape(serverId)}=\\(0,[\\w$]+\\.[\\w$]+\\)\\(([\\w$]+\\.[\\w$]+),[\\w$]+\\)`,
-                                "g",
+                            /\(0,([\w$]+\.[\w$]+)\)\(\{([^{}]*)/g,
+                        ),
+                    ].filter(([, , props]) =>
+                        [
+                            "conversationId:",
+                            "renderedTurns:",
+                            "onEditUserMessage:",
+                            "onFork:",
+                        ].every((property) => props.includes(property)),
+                    ),
+                    "会话轮次调用",
+                );
+                replace(
+                    page,
+                    turnCall,
+                    turnCall.replace(
+                        `(0,${renderTurns})(`,
+                        () => `${api}.turns(${renderTurns},`,
+                    ),
+                );
+                const serverIds = new Set(
+                    [...source.matchAll(/serverConversationId:([\w$]+)/g)].map(
+                        (match) => match[1],
+                    ),
+                );
+                const selector = single(
+                    [
+                        ...new Set(
+                            [...serverIds].flatMap((serverId) =>
+                                [
+                                    ...source.matchAll(
+                                        new RegExp(
+                                            `(?<![\\w$.])${RegExp.escape(serverId)}=\\(0,[\\w$]+\\.[\\w$]+\\)\\(([\\w$]+\\.[\\w$]+),[\\w$]+\\)`,
+                                            "g",
+                                        ),
+                                    ),
+                                ].map((match) => match[1]),
                             ),
                         ),
                     ],
@@ -2368,17 +2831,15 @@
                 source.includes("getRenderTelemetry:") &&
                 source.includes("isStreaming:(0,"),
             (content) => {
-                const [contentExport] = single(
-                    Object.entries(
-                        getChatgptModuleExports(content.source),
-                    ).filter(
-                        ([, name]) =>
-                            typeof name !== "function" &&
-                            !content.source.includes(`function ${name}(`),
-                    ),
-                    "대화 콘텐츠 선택기",
+                const render = exported(
+                    content,
+                    "대화 콘텐츠 인터페이스",
+                    (source) =>
+                        source.includes("context_truncation_continuation:") &&
+                        source.includes("getRenderTelemetry:"),
                 );
-                bindings.turns = [content.id, contentExport];
+                bindings.turns = [content.id, render.exportName];
+                const source = render.toString();
                 const imports = Object.fromEntries(
                     [
                         ...content.source.matchAll(
@@ -2392,7 +2853,7 @@
                 ]) {
                     const value = single(
                         [
-                            ...content.source.matchAll(
+                            ...source.matchAll(
                                 new RegExp(`${field}:([\\w$]+)`, "g"),
                             ),
                         ],
@@ -2400,7 +2861,7 @@
                     )[1];
                     const reference = single(
                         [
-                            ...content.source.matchAll(
+                            ...source.matchAll(
                                 new RegExp(
                                     `(?:[,;])${RegExp.escape(value)}=[\\w$]+\\(([\\w$]+)\\.([\\w$]+),[\\w$]+\\)`,
                                     "g",
@@ -2413,13 +2874,34 @@
                 }
                 const status = single(
                     [
-                        ...content.source.matchAll(
+                        ...source.matchAll(
                             /isStreaming:\(0,[\w$]+\.[\w$]+\)\([\w$]+\(([\w$]+)\.([\w$]+),[\w$]+\)\)/g,
                         ),
                     ],
                     "응답 상태 인터페이스",
                 );
                 bindings.status = [imports[status[1]], status[2]];
+                const actions = exported(content, "轮次操作栏条件", (source) =>
+                    source.includes(".suppressTurnActions"),
+                );
+                const [state] = single(
+                    [
+                        ...actions
+                            .toString()
+                            .matchAll(/"in_progress"!==[\w$]+\.status/g),
+                    ],
+                    "轮次生成状态",
+                );
+                replace(
+                    content,
+                    actions.toString(),
+                    actions
+                        .toString()
+                        .replace(
+                            state,
+                            () => `(${state}||arguments[1]===true)`,
+                        ),
+                );
             },
         );
 
@@ -2826,7 +3308,7 @@
             "모델 한도 모듈",
             (source) =>
                 source.includes("using_default_model_slug") &&
-                source.includes("work_subscription_required"),
+                source.includes("model_slug==="),
             (limits) => {
                 const resolveLimit = exported(
                     limits,
@@ -2872,10 +3354,11 @@
         );
 
         module(
-            "메시지 작업 모듈",
+            "消息复制模块",
             (source) =>
-                source.includes("getCopyHtml") &&
-                source.includes("sourcesAction:"),
+                source.includes(
+                    '.getAttribute("data-chatgpt-copy-reference")',
+                ) && source.includes("mdastExtensions:"),
             (messages) => {
                 const copyText = declared(
                     messages,
@@ -2905,6 +3388,16 @@
                     messages,
                     `${api}.register({messageText:${copyText},parseMarkdown:content=>${parse}(content,{extensions:[${extensions}()],mdastExtensions:[${mdastExtensions}()]}),resolveReference:${resolve}});`,
                 );
+            },
+            "chat",
+        );
+
+        module(
+            "메시지 작업 모듈",
+            (source) =>
+                source.includes("getCopyHtml") &&
+                source.includes("sourcesAction:"),
+            (messages) => {
                 const renderMessage = single(
                     [
                         ...new Set(
@@ -2950,9 +3443,123 @@
                     ],
                     "메시지 액션 바",
                 );
+                const actionsSource =
+                    declarations(messages)[renderActions].toString();
+                const actions = { source: actionsSource };
+                const [, item] = single(
+                    [...actions.source.matchAll(/assistantItem:([\w$]+)/g)],
+                    "助手消息参数",
+                );
+                const [copyCall, copyText] = single(
+                    [
+                        ...actions.source.matchAll(
+                            new RegExp(
+                                `${RegExp.escape(item)}\\?\\.completed===!0\\?(\\(0,[\\w$]+\\.[\\w$]+\\)|[\\w$.]+)\\(${RegExp.escape(item)}\\):""`,
+                                "g",
+                            ),
+                        ),
+                    ],
+                    "原生消息复制调用",
+                );
+                const [, canCopy, text] = single(
+                    [
+                        ...actions.source.matchAll(
+                            /copyText:([\w$]+)\?([\w$]+):void 0/g,
+                        ),
+                    ],
+                    "消息复制状态",
+                );
+                const [rowCall, actionRow] = single(
+                    [
+                        ...actions.source.matchAll(
+                            /\(0,[\w$]+\.(?:jsx|jsxs)\)\(([\w$.]+),\{actionRowRef:/g,
+                        ),
+                    ],
+                    "操作栏组件",
+                );
+                replace(
+                    actions,
+                    rowCall,
+                    rowCall.replace(
+                        `(${actionRow},`,
+                        () => `(${api}.actionRow,`,
+                    ),
+                );
+                const [copyState, declaration, available] = single(
+                    [
+                        ...actions.source.matchAll(
+                            new RegExp(
+                                `((?:[,;]|\\blet )${RegExp.escape(canCopy)}=)([^,;]+)`,
+                                "g",
+                            ),
+                        ),
+                    ],
+                    "复制按钮可用状态",
+                );
+                const [, image, ready] = single(
+                    [...available.matchAll(/^null==([\w$]+)&&([\w$]+)$/g)],
+                    "复制按钮内容",
+                );
+                replace(
+                    actions,
+                    copyState,
+                    `${declaration}null==${image}&&(${api}.earlyActionsEnabled()?${text}.trim().length>0:${ready})`,
+                );
+                replace(actions, copyCall, `${copyText}(${item})`);
+                replace(messages, actionsSource, actions.source);
+                const renderTurn = declared(messages, "会话轮次", (source) =>
+                    source.includes(`(${renderActions},{`),
+                );
+                const turn = declarations(messages)[renderTurn].toString();
+                const [, turnValue] = single(
+                    [
+                        ...turn.matchAll(
+                            /favoriteSourceMessageIds:([\w$]+)\.messageIds/g,
+                        ),
+                    ],
+                    "轮次消息来源",
+                );
+                const [condition, check] = single(
+                    [
+                        ...turn.matchAll(
+                            new RegExp(
+                                `(\\(0,[\\w$]+\\.[\\w$]+\\))\\(${RegExp.escape(turnValue)}\\)`,
+                                "g",
+                            ),
+                        ),
+                    ],
+                    "轮次操作栏条件",
+                );
+                const [, assistant] = single(
+                    [...turn.matchAll(/assistantItem:([^,}]+)/g)],
+                    "轮次助手消息",
+                );
+                const [, images] = single(
+                    [...turn.matchAll(/imageItems:([\w$]+)/g)],
+                    "轮次图片",
+                );
+                replace(
+                    messages,
+                    condition,
+                    `${check}(${turnValue},${api}.hasMessageActions(${assistant},${images}))`,
+                );
                 append(
                     messages,
-                    `${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.message(${renderActions},true);`,
+                    `${api}.register({actionRow:${actionRow}});${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
+                );
+                const menu = declared(messages, "消息菜单", (source) =>
+                    source.includes(
+                        'id:"chatgptConversations.messageActions.more"',
+                    ),
+                );
+                const branch = declared(messages, "分支菜单", (source) =>
+                    source.includes(
+                        'id:"chatgptConversations.messageActions.branchInNewChat"',
+                    ),
+                );
+                append(
+                    messages,
+                    `${menu}=${api}.branchMenu(${menu},${branch});`,
                 );
             },
             "chat",
@@ -3015,6 +3622,169 @@
                     `(original=>async function(...args){const result=await original(...args),plan=${fakePlan};return plan?{...result,accounts:result.accounts.map(account=>({...account,plan_type:plan}))}:result})`,
                 );
             },
+        );
+
+        module(
+            "输入长度模块",
+            (source) =>
+                source.includes("isPromptTooLong:") &&
+                source.includes(".view.state.doc.content.size"),
+            (composer) => {
+                const [call, check, limit, controller] = single(
+                    [
+                        ...composer.source.matchAll(
+                            /(\(0,[\w$]+\.[\w$]+\)|[\w$]+)\(([\w$]+),([\w$]+)\.view\.state\.doc\.content\.size\)/g,
+                        ),
+                    ],
+                    "输入长度判断",
+                );
+                replace(
+                    composer,
+                    call,
+                    `${check}(${api}.promptLimit(${controller},${limit}),${controller}.view.state.doc.content.size)`,
+                );
+                append(
+                    composer,
+                    `${api}.register({isPromptTooLong:${check}});`,
+                );
+            },
+            "chat",
+        );
+
+        module(
+            "文本粘贴模块",
+            (source) =>
+                source.includes("handlePaste(") &&
+                source.includes('emit("pasted-text",'),
+            (editor) => {
+                const [handler, args] = single(
+                    [...editor.source.matchAll(/handlePaste\(([\w$,]+)\)\{/g)],
+                    "粘贴处理入口",
+                );
+                const view = args.split(",")[0];
+                replace(
+                    editor,
+                    handler,
+                    `handlePaste:${api}.paste(function(${args}){`,
+                );
+                replace(editor, "},handleDrop(", "}),handleDrop(");
+                const [condition, size, threshold] = single(
+                    [
+                        ...editor.source.matchAll(
+                            /(Math\.max\([\w$]+\.length,[\w$]+\?\.length\?\?0\))>=([\w$]+\.[\w$]+)(?=&&[\w$]+\.emit\("pasted-text",)/g,
+                        ),
+                    ],
+                    "粘贴文本长度",
+                );
+                replace(
+                    editor,
+                    condition,
+                    `${size}>=${api}.clipboardThreshold(${view},${threshold})`,
+                );
+            },
+            "chat",
+        );
+
+        module(
+            "粘贴附件模块",
+            (source) =>
+                source.includes("chatgptConversations.bigPaste.fileName") &&
+                source.includes("addPastedTextHandler"),
+            (composer) => {
+                const name = declared(composer, "粘贴附件处理", (source) =>
+                    source.includes("chatgptConversations.bigPaste.fileName"),
+                );
+                const source = declarations(composer)[name].toString();
+                const paste = { source };
+                const [, event] = single(
+                    [
+                        ...source.matchAll(
+                            /\{text:[\w$]+,markdown:[\w$]+,codeBlockLanguage:[\w$]+\}=([\w$]+)/g,
+                        ),
+                    ],
+                    "粘贴文本参数",
+                );
+                const [condition, threshold, size] = single(
+                    [
+                        ...source.matchAll(
+                            /null!=([\w$]+)&&\(\1<=0\|\|([\w$]+)<\1\)/g,
+                        ),
+                    ],
+                    "粘贴附件长度",
+                );
+                const effective = `${api}.pasteThreshold(${event},${threshold})`;
+                replace(
+                    paste,
+                    condition,
+                    `null!=${effective}&&(${effective}<=0||${size}<${effective})`,
+                );
+                const [minimumCondition, minimum] = single(
+                    [
+                        ...source.matchAll(
+                            new RegExp(
+                                `${RegExp.escape(size)}<([\\w$]+\\.[\\w$]+)`,
+                                "g",
+                            ),
+                        ),
+                    ],
+                    "粘贴附件起始长度",
+                );
+                replace(
+                    paste,
+                    minimumCondition,
+                    `${size}<${api}.pasteThreshold(${event},${minimum})`,
+                );
+                replace(paste, `null==${threshold}`, `null==${effective}`);
+                const [, controller, listener] = single(
+                    [
+                        ...source.matchAll(
+                            /([\w$]+)\.addPastedTextHandler\(([\w$]+)\)/g,
+                        ),
+                    ],
+                    "粘贴附件监听",
+                );
+                const [callback, argument] = single(
+                    [
+                        ...source.matchAll(
+                            new RegExp(
+                                `(?<![\\w$])${RegExp.escape(listener)}=([\\w$]+)=>`,
+                                "g",
+                            ),
+                        ),
+                    ],
+                    "粘贴附件回调",
+                );
+                replace(
+                    paste,
+                    callback,
+                    `${listener}=${api}.pasteHandler(${controller},${argument}=>`,
+                );
+                replace(
+                    paste,
+                    `;return ${controller}.addPastedTextHandler(${listener})`,
+                    `);return ${controller}.addPastedTextHandler(${listener})`,
+                );
+                replace(
+                    paste,
+                    `${controller}.removePastedTextHandler(${listener})`,
+                    `${api}.removePasteHandler(${controller},${listener})`,
+                );
+                const [restore, available, text] = single(
+                    [
+                        ...source.matchAll(
+                            /text:(\(0,[\w$]+\.[\w$]+\)\(([\w$]+)\.length\))\?\2:void 0/g,
+                        ),
+                    ],
+                    "粘贴文本回填",
+                );
+                replace(
+                    paste,
+                    restore,
+                    `text:(${available}||${api}.pasteMode(${event})!=="native"&&${text}.length<${minimum})?${text}:void 0`,
+                );
+                replace(composer, source, paste.source);
+            },
+            "chat",
         );
 
         module(
@@ -3089,18 +3859,21 @@
         ];
     }
 
-    function getChatgptPage() {
-        const pathname = pageWindow.location.pathname;
+    function getChatgptPage(pathname = pageWindow.location.pathname) {
         if (pathname.startsWith("/dots/")) return "dot";
         if (/^\/(?:c|share|g\/[^/]+\/(?:shared\/)?c)\//.test(pathname))
             return "chat";
     }
 
     function getChatgptModuleItems(page) {
-        const items = ["런타임 모델 전환", "사이드바 가운데 클릭으로 새 탭 열기"];
+        const items = ["런타임 모델 전환"];
+        if (chatgptNewTabEnabled) items.push("中键新标签页打开");
         if (page && chatgptCopyButtonEnabled) items.push("전체 대화 복사");
+        if (page !== "dot" && chatgptPasteMode !== "native")
+            items.push(`文本粘贴：${CHATGPT_PASTE_MODES[chatgptPasteMode]}`);
         if (page === "chat") {
             if (chatgptMessageInfoEnabled) items.push("시간 및 모델 표시");
+            if (chatgptEarlyActionsEnabled) items.push("提前显示操作栏");
             if (chatgptApprovalEnabled) items.push("도구 요청 자동 승인");
             if (chatgptAutoCollapseEnabled) items.push("분석 내용 자동 접기");
         }
@@ -3291,37 +4064,53 @@
         const items = getChatgptModuleItems(page)
             .map((item) => `• ${item}`)
             .join("\n");
-        let label = "불러오는 중";
+        const state = chatgptModuleState;
+        const errors = [
+            ...(chatgptInjectionFailure ? [chatgptInjectionFailure] : []),
+            ...(state?.errors ?? []),
+        ];
+        const loading = state?.loading ?? [];
+        const pending = state?.pending ?? ["原生路由入口"];
+        const refresh =
+            chatgptModuleInjectionEnabled !== chatgptModuleInjectionStarted
+                ? chatgptModuleInjectionEnabled
+                    ? `페이지를 새로고침하면 모듈 주입이 활성화됩니다:\n${items}`
+                    : "페이지를 새로고침하면 모듈 주입이 비활성화됩니다."
+                : null;
+        let label = "未完成";
         let color = "#bbbbbb";
-        let description = "ChatGPT 페이지 모듈을 불러오는 중입니다.";
-        const pending = chatgptModuleEntries.filter(
-            (entry) =>
-                entry.id === undefined &&
-                (entry.page === undefined || entry.page === page),
-        );
-        if (chatgptModuleInjectionEnabled !== chatgptModuleInjectionStarted) {
-            label = "새로고침 후 적용";
-            color = "#ffd700";
-            description = chatgptModuleInjectionEnabled
-                ? `페이지를 새로고침하면 모듈 주입이 활성화됩니다:\n${items}`
-                : "페이지를 새로고침하면 모듈 주입이 비활성화됩니다.";
-        } else if (!chatgptModuleInjectionEnabled) {
-            label = "주입 비활성";
-            description = "모듈 주입이 비활성화되어 있습니다.";
-        } else if (chatgptInjectionFailure) {
+        if (errors.length) {
             label = "주입 실패";
             color = "#ff6b6b";
-            description = chatgptInjectionFailure;
-        } else if (chatgptRuntimeReady && pending.length === 0) {
+        } else if (refresh) {
+            label = "새로고침 후 적용";
+            color = "#ffd700";
+        } else if (!chatgptModuleInjectionEnabled) {
+            label = "주입 비활성";
+        } else if (loading.length) {
+            label = "불러오는 중";
+        } else if (state?.delivered && pending.length === 0) {
             label = "주입 성공";
             color = "#98fb98";
-            description = `현재 페이지에 주입됨:\n${items}`;
-        } else if (pending.length) {
-            description = `불러오는 중:\n${pending.map((entry) => `• ${entry.label}`).join("\n")}`;
+        }
+        const description = [...errors];
+        if (refresh) description.push(refresh);
+        if (label === "주입 비활성") description.push("모듈 주입이 비활성화되어 있습니다.");
+        if (chatgptModuleInjectionStarted) {
+            if (loading.length)
+                description.push(
+                    `불러오는 중:\n${loading.map((file) => `• ${new URL(file).pathname}`).join("\n")}`,
+                );
+            if (pending.length)
+                description.push(
+                    `待接入：\n${pending.map((item) => `• ${item}`).join("\n")}`,
+                );
+            if (label === "주입 성공")
+                description.push(`현재 페이지에 주입됨:\n${items}`);
         }
         status.innerText = label;
         status.style.color = color;
-        if (tooltip) tooltip.innerText = description;
+        if (tooltip) tooltip.innerText = description.join("\n\n");
     }
 
     function updateChatgptRuntimeModelControls() {
@@ -3402,9 +4191,6 @@
                 updateChatgptRuntimeModelControls();
             },
         );
-        pageWindow.addEventListener("load", updateChatgptInjectionStatus, {
-            once: true,
-        });
     }
 
     function formatChatgptConversation(turns, conversationId) {
@@ -3738,6 +4524,41 @@
                     "></span>
                 </label>
             </div>
+            <div id="chatgpt-paste-mode-container" style="display: flex; align-items: center; justify-content: space-between;">
+                <label for="chatgpt-paste-mode-select">文本粘贴
+                <span id="chatgpt-paste-mode-tooltip" style="
+                    cursor: pointer;
+                    color: #fff;
+                    font-size: 12px;
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    line-height: 14px;
+                    text-align: center;
+                    border-radius: 50%;
+                    border: 1px solid #fff;
+                    margin-left: 3px;
+                ">?</span></label>
+                <select id="chatgpt-paste-mode-select" style="
+                    background-color: #333;
+                    color: #fff;
+                    border: 0px;
+                    border-radius: 4px;
+                    padding: 4px 8px 4px 8px;
+                    font-size: 11px;
+                    cursor: pointer;
+                    outline: none;
+                    line-height: 1em;
+                    box-sizing: border-box;
+                ">
+                    ${Object.entries(CHATGPT_PASTE_MODES)
+                        .map(
+                            ([value, label]) =>
+                                `<option value="${value}">${label}</option>`,
+                        )
+                        .join("")}
+                </select>
+            </div>
             <div id="chatgpt-copy-button-container" style="display: flex; align-items: center; justify-content: space-between;">
                 <span>복사 버튼
                 <span id="chatgpt-copy-button-tooltip" style="
@@ -3901,6 +4722,47 @@
                     "></span>
                 </label>
             </div>
+            <div id="chatgpt-early-actions-container" style="display: flex; align-items: center; justify-content: space-between;">
+                <span>提前显示操作栏
+                <span id="chatgpt-early-actions-tooltip" style="
+                    cursor: pointer;
+                    color: #fff;
+                    font-size: 12px;
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    line-height: 14px;
+                    text-align: center;
+                    border-radius: 50%;
+                    border: 1px solid #fff;
+                    margin-left: 3px;
+                ">?</span></span>
+                <label style="position: relative; display: inline-block; width: 28px; height: 16px; cursor: pointer;">
+                    <input type="checkbox" id="chatgpt-early-actions-toggle" style="opacity: 0; width: 0; height: 0;">
+                    <span id="chatgpt-early-actions-slider" style="
+                        position: absolute;
+                        cursor: pointer;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-color: #555;
+                        transition: 0.3s;
+                        border-radius: 16px;
+                    "></span>
+                    <span id="chatgpt-early-actions-slider-dot" style="
+                        position: absolute;
+                        content: '';
+                        height: 10px;
+                        width: 10px;
+                        left: 3px;
+                        bottom: 3px;
+                        background-color: white;
+                        transition: 0.3s;
+                        border-radius: 50%;
+                    "></span>
+                </label>
+            </div>
             <div id="chatgpt-approval-container" style="display: flex; align-items: center; justify-content: space-between;">
                 <span>도구 요청 자동 승인
                 <span id="chatgpt-approval-tooltip" style="
@@ -3971,6 +4833,47 @@
                         border-radius: 16px;
                     "></span>
                     <span id="chatgpt-auto-collapse-slider-dot" style="
+                        position: absolute;
+                        content: '';
+                        height: 10px;
+                        width: 10px;
+                        left: 3px;
+                        bottom: 3px;
+                        background-color: white;
+                        transition: 0.3s;
+                        border-radius: 50%;
+                    "></span>
+                </label>
+            </div>
+            <div id="chatgpt-new-tab-container" style="display: flex; align-items: center; justify-content: space-between;">
+                <span>中键新标签页打开
+                <span id="chatgpt-new-tab-tooltip" style="
+                    cursor: pointer;
+                    color: #fff;
+                    font-size: 12px;
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    line-height: 14px;
+                    text-align: center;
+                    border-radius: 50%;
+                    border: 1px solid #fff;
+                    margin-left: 3px;
+                ">?</span></span>
+                <label style="position: relative; display: inline-block; width: 28px; height: 16px; cursor: pointer;">
+                    <input type="checkbox" id="chatgpt-new-tab-toggle" style="opacity: 0; width: 0; height: 0;">
+                    <span id="chatgpt-new-tab-slider" style="
+                        position: absolute;
+                        cursor: pointer;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-color: #555;
+                        transition: 0.3s;
+                        border-radius: 16px;
+                    "></span>
+                    <span id="chatgpt-new-tab-slider-dot" style="
                         position: absolute;
                         content: '';
                         height: 10px;
@@ -4362,6 +5265,15 @@
             "메시지 끝에 시간과 모델 정보를 표시합니다.",
         );
 
+        const chatgptEarlyActionsTooltipBox = createTooltip(
+            "chatgpt-early-actions-tooltip-box",
+            "思考中提前显示消息底部的操作栏。",
+        );
+        const chatgptPasteModeTooltipBox = createTooltip(
+            "chatgpt-paste-mode-tooltip-box",
+            "文本优先：超出模型长度才转为附件。\n仅文本：无论如何都粘贴为文本。\n仅附件：粘贴文本都转附件上传。\n原版：按字数自动决定转为附件。",
+        );
+
         const chatgptApprovalTooltipBox = createTooltip(
             "chatgpt-approval-tooltip-box",
             "각 도구 요청에서 자동으로 허용을 선택합니다.",
@@ -4370,6 +5282,11 @@
         const chatgptAutoCollapseTooltipBox = createTooltip(
             "chatgpt-auto-collapse-tooltip-box",
             "분석 실행 내용을 기본적으로 접습니다.",
+        );
+
+        const chatgptNewTabTooltipBox = createTooltip(
+            "chatgpt-new-tab-tooltip-box",
+            "让侧栏和分支菜单支持中键和 Ctrl+单击。",
         );
 
         const chatgptSelectionPopoverTooltipBox = createTooltip(
@@ -4443,12 +5360,24 @@
                 chatgptMessageInfoTooltipBox,
             );
             bindTooltipEvents(
+                "chatgpt-early-actions-tooltip",
+                chatgptEarlyActionsTooltipBox,
+            );
+            bindTooltipEvents(
+                "chatgpt-paste-mode-tooltip",
+                chatgptPasteModeTooltipBox,
+            );
+            bindTooltipEvents(
                 "chatgpt-approval-tooltip",
                 chatgptApprovalTooltipBox,
             );
             bindTooltipEvents(
                 "chatgpt-auto-collapse-tooltip",
                 chatgptAutoCollapseTooltipBox,
+            );
+            bindTooltipEvents(
+                "chatgpt-new-tab-tooltip",
+                chatgptNewTabTooltipBox,
             );
             bindTooltipEvents(
                 "chatgpt-selection-popover-tooltip",
@@ -4603,6 +5532,17 @@
         }
 
         if (isChatgptMode) {
+            const pasteSelect = document.getElementById(
+                "chatgpt-paste-mode-select",
+            );
+            pasteSelect.value = chatgptPasteMode;
+            pasteSelect.addEventListener("change", () => {
+                if (!Object.hasOwn(CHATGPT_PASTE_MODES, pasteSelect.value))
+                    return;
+                chatgptPasteMode = pasteSelect.value;
+                localStorage.setItem(CHATGPT_PASTE_MODE_KEY, chatgptPasteMode);
+                updateChatgptInjectionStatus();
+            });
             const difficultyElement = document.getElementById("difficulty");
             difficultyElement.addEventListener("click", () => {
                 powRadix = powRadix === 10 ? 16 : 10;
@@ -4659,6 +5599,18 @@
                 },
             );
             bindToggle(
+                "chatgpt-early-actions",
+                chatgptEarlyActionsEnabled,
+                CHATGPT_EARLY_ACTIONS_KEY,
+                (value) => {
+                    chatgptEarlyActionsEnabled = value;
+                    pageWindow.dispatchEvent(
+                        new pageWindow.Event(CHATGPT_EARLY_ACTIONS_EVENT),
+                    );
+                    updateChatgptInjectionStatus();
+                },
+            );
+            bindToggle(
                 "chatgpt-approval",
                 chatgptApprovalEnabled,
                 CHATGPT_APPROVAL_KEY,
@@ -4678,6 +5630,18 @@
                     chatgptAutoCollapseEnabled = value;
                     pageWindow.dispatchEvent(
                         new pageWindow.Event(CHATGPT_AUTO_COLLAPSE_EVENT),
+                    );
+                    updateChatgptInjectionStatus();
+                },
+            );
+            bindToggle(
+                "chatgpt-new-tab",
+                chatgptNewTabEnabled,
+                CHATGPT_NEW_TAB_KEY,
+                (value) => {
+                    chatgptNewTabEnabled = value;
+                    pageWindow.dispatchEvent(
+                        new pageWindow.Event(CHATGPT_NEW_TAB_EVENT),
                     );
                     updateChatgptInjectionStatus();
                 },
