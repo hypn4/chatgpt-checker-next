@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.6.3.1
+// @version      5.6.4.0
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -1376,21 +1376,30 @@
                     );
                 };
             },
-            turns(fn, props) {
-                const result = fn(props);
-                const conversation = {
-                    id: props.conversationId,
-                    isWorkConversation: props.isWorkConversation,
-                    copyReady: props.renderedTurns.length > 0,
-                    turns:
-                        props.isReadOnly || props.isTemporaryChat
-                            ? props.renderedTurns
-                            : undefined,
-                };
-                conversations.set(conversation.id, conversation);
-                return result;
+            turns(fn) {
+                return after(fn, ([props]) => {
+                    conversations.set(props.conversationId, {
+                        id: props.conversationId,
+                        isWorkConversation: props.isWorkConversation,
+                        copyReady: props.renderedTurns.length > 0,
+                        turns:
+                            props.isReadOnly || props.isTemporaryChat
+                                ? props.renderedTurns
+                                : undefined,
+                    });
+                });
             },
-            earlyActionsEnabled: getEarlyActionsEnabled,
+            earlyCopyText(item, isImage) {
+                if (
+                    !chatgptEarlyActionsEnabled ||
+                    !item ||
+                    item.completed ||
+                    isImage
+                )
+                    return "";
+                const text = native.messageText(item);
+                return text.trim() ? text : "";
+            },
             promptLimit(controller, limit) {
                 composerState(controller.view).limit = limit;
                 return limit;
@@ -2655,6 +2664,20 @@
             wrap(picker, renderPicker, `${api}.picker`);
         });
 
+        const mapsTurns = (source) =>
+            /\brenderedTurns:([\w$]+)(?![\w$])[\s\S]*?(?<![\w$.])\1\.map\(/.test(
+                source,
+            );
+        module(
+            "会话轮次模块",
+            mapsTurns,
+            (turns) => {
+                const render = exported(turns, "会话轮次映射", mapsTurns);
+                wrap(turns, render, `${api}.turns`);
+            },
+            "chat",
+        );
+
         module(
             "대화 페이지 모듈",
             (source) => source.includes("ChatGptConversationPage:"),
@@ -2663,29 +2686,6 @@
                     /\{[^{}]*\bisInlinePreview:[^{}]*\}=[\w$]+/.test(source),
                 );
                 const source = view.toString();
-                const [turnCall, renderTurns] = single(
-                    [
-                        ...source.matchAll(
-                            /\(0,([\w$]+\.[\w$]+)\)\(\{([^{}]*)/g,
-                        ),
-                    ].filter(([, , props]) =>
-                        [
-                            "conversationId:",
-                            "renderedTurns:",
-                            "onEditUserMessage:",
-                            "onFork:",
-                        ].every((property) => props.includes(property)),
-                    ),
-                    "대화 턴 호출",
-                );
-                replace(
-                    page,
-                    turnCall,
-                    turnCall.replace(
-                        `(0,${renderTurns})(`,
-                        () => `${api}.turns(${renderTurns},`,
-                    ),
-                );
                 const serverIds = new Set(
                     [...source.matchAll(/serverConversationId:([\w$]+)/g)].map(
                         (match) => match[1],
@@ -3289,8 +3289,9 @@
                     models,
                     "모델 옵션 파싱 인터페이스",
                     (source) =>
-                        source.includes(".thinkingEffort??") &&
-                        source.includes("defaultThinkingEffortByModelSlug"),
+                        /defaultThinkingEffortByModelSlug\?\.\[[\w$]+\.slug\]/.test(
+                            source,
+                        ),
                 );
                 const modelVersion = exported(
                     models,
@@ -3398,50 +3399,19 @@
                 source.includes("getCopyHtml") &&
                 source.includes("sourcesAction:"),
             (messages) => {
-                const renderMessage = single(
-                    [
-                        ...new Set(
-                            [
-                                ...messages.source.matchAll(
-                                    /\(0,[\w$]+\.(?:jsx|jsxs)\)\(([\w$]+),\{([^{}]*)/g,
-                                ),
-                            ]
-                                .filter((match) =>
-                                    [
-                                        "item:",
-                                        "items:",
-                                        "isMostRecentTurn:",
-                                        "isReadOnly:",
-                                    ].every((property) =>
-                                        match[2].includes(property),
-                                    ),
-                                )
-                                .map((match) => match[1]),
-                        ),
-                    ],
+                const renderMessage = declared(
+                    messages,
                     "메시지 컴포넌트",
+                    (source) =>
+                        source.includes('"user-message"') &&
+                        /sentAtMs:[\w$]+\.sentAtMs\b/.test(source),
                 );
-                const renderActions = single(
-                    [
-                        ...new Set(
-                            [
-                                ...messages.source.matchAll(
-                                    /\(0,[\w$]+\.(?:jsx|jsxs)\)\(([\w$]+),\{([^{}]*)/g,
-                                ),
-                            ]
-                                .filter((match) =>
-                                    [
-                                        "assistantItem:",
-                                        "sourcesAction:",
-                                        "actionRowRef:",
-                                    ].every((property) =>
-                                        match[2].includes(property),
-                                    ),
-                                )
-                                .map((match) => match[1]),
-                        ),
-                    ],
+                const renderActions = declared(
+                    messages,
                     "메시지 액션 바",
+                    (source) =>
+                        source.includes("assistantItem:") &&
+                        source.includes("copyText:"),
                 );
                 const actionsSource =
                     declarations(messages)[renderActions].toString();
@@ -3450,24 +3420,13 @@
                     [...actions.source.matchAll(/assistantItem:([\w$]+)/g)],
                     "어시스턴트 메시지 매개변수",
                 );
-                const [copyCall, copyText] = single(
-                    [
-                        ...actions.source.matchAll(
-                            new RegExp(
-                                `${RegExp.escape(item)}\\?\\.completed===!0\\?(\\(0,[\\w$]+\\.[\\w$]+\\)|[\\w$.]+)\\(${RegExp.escape(item)}\\):""`,
-                                "g",
-                            ),
-                        ),
-                    ],
-                    "네이티브 메시지 복사 호출",
-                );
-                const [, canCopy, text] = single(
-                    [
-                        ...actions.source.matchAll(
-                            /copyText:([\w$]+)\?([\w$]+):void 0/g,
-                        ),
-                    ],
+                const [, canCopy] = single(
+                    [...actions.source.matchAll(/\bcanCopy:([\w$]+)(?=[,}])/g)],
                     "메시지 복사 상태",
+                );
+                const [, isImage] = single(
+                    [...actions.source.matchAll(/\bisImage:([^,}]+)/g)],
+                    "图片操作状态",
                 );
                 const [rowCall, actionRow] = single(
                     [
@@ -3485,27 +3444,28 @@
                         () => `(${api}.actionRow,`,
                     ),
                 );
-                const [copyState, declaration, available] = single(
+                const [assignment] = single(
                     [
                         ...actions.source.matchAll(
                             new RegExp(
-                                `((?:[,;]|\\blet )${RegExp.escape(canCopy)}=)([^,;]+)`,
+                                `[^\\w$.]${RegExp.escape(canCopy)}=(?!=)`,
                                 "g",
                             ),
                         ),
                     ],
                     "복사 버튼 사용 가능 상태",
                 );
-                const [, image, ready] = single(
-                    [...available.matchAll(/^null==([\w$]+)&&([\w$]+)$/g)],
-                    "복사 버튼 콘텐츠",
+                replace(actions, "{", "{let checkerCopyText;");
+                replace(
+                    actions,
+                    assignment,
+                    `${assignment}(checkerCopyText=${api}.earlyCopyText(${item},${isImage}))?true:`,
                 );
                 replace(
                     actions,
-                    copyState,
-                    `${declaration}null==${image}&&(${api}.earlyActionsEnabled()?${text}.trim().length>0:${ready})`,
+                    "copyText:",
+                    "copyText:checkerCopyText?checkerCopyText:",
                 );
-                replace(actions, copyCall, `${copyText}(${item})`);
                 replace(messages, actionsSource, actions.source);
                 const renderTurn = declared(messages, "대화 턴", (source) =>
                     source.includes(`(${renderActions},{`),
@@ -3568,16 +3528,16 @@
         module(
             "메시지 시간 형식 모듈",
             (source) =>
-                source.includes("sentAtMs:") &&
                 source.includes("weekdayFormat:") &&
+                source.includes("weekday:") &&
                 source.includes(".formatDate("),
             (time) => {
                 const format = exported(
                     time,
                     "메시지 시간 형식 인터페이스",
                     (source) =>
-                        source.includes("sentAtMs:") &&
                         source.includes("weekdayFormat:") &&
+                        source.includes("weekday:") &&
                         source.includes(".formatDate("),
                 );
                 wrap(time, format, `${api}.timeFormat`);
