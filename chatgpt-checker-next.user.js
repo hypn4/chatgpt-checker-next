@@ -3614,7 +3614,7 @@
             contentModule,
         );
 
-        const copyButton = (label, role, writeCall, transform) => {
+        const copyButton = (label, role, writeCall, getFields) => {
             const surface = `surface:"${role}_message"`;
             const matches = (source) =>
                 source.includes(surface) && writeCall.test(source);
@@ -3630,7 +3630,28 @@
                     );
                     const start = source.lastIndexOf(surface, write.index);
                     if (start < 0) throw new Error("复制操作未匹配");
-                    const click = source.slice(start, write.index);
+                    let click = source.slice(start, write.index);
+                    for (const [name, value] of getFields(write)) {
+                        const [assignment] = single(
+                            [
+                                ...click.matchAll(
+                                    new RegExp(
+                                        `(?:;(?:let|const|var) |,)${RegExp.escape(name)}=(?!=)`,
+                                        "g",
+                                    ),
+                                ),
+                            ],
+                            label,
+                        );
+                        click = click.replace(
+                            assignment,
+                            () => `${assignment}checkerText!=null?${value}:`,
+                        );
+                    }
+                    click = click.replace(
+                        ";",
+                        ";const checkerText=checkerCopy.current?.();",
+                    );
                     const [, props] = source.match(
                         /^function [\w$]+\(([\w$]+)\)/,
                     );
@@ -3644,7 +3665,7 @@
                                 () =>
                                     `{const checkerCopy=${api}.useMessageCopy(${props});`,
                             ) +
-                            transform(click, write) +
+                            click +
                             source.slice(write.index),
                     );
                 },
@@ -3655,65 +3676,19 @@
             "用户消息复制按钮",
             "user",
             /;\(0,[\w$]+\.[\w$]+\)\(([\w$]+),[\w$]+\)\.then\(/,
-            (click, [, payload]) => {
-                const [assignment] = single(
-                    [
-                        ...click.matchAll(
-                            new RegExp(
-                                `;(?:let|const|var) ${RegExp.escape(payload)}=`,
-                                "g",
-                            ),
-                        ),
-                    ],
-                    "复制用户消息内容",
-                );
-                return click.replace(
-                    assignment,
-                    () =>
-                        `;const checkerText=checkerCopy.current?.()${assignment}checkerText!=null?checkerText:`,
-                );
-            },
+            ([, payload]) => [[payload, "checkerText"]],
         );
-        module(
+        copyButton(
             "助手消息复制按钮",
-            (source) =>
-                source.includes('surface:"assistant_message"') &&
-                source.includes("getCopyHtml:"),
-            (button) => {
-                const fn = declared(
-                    button,
-                    "助手消息复制",
-                    (source) =>
-                        source.includes('surface:"assistant_message"') &&
-                        source.includes("getCopyHtml:"),
-                );
-                const source = declarations(button)[fn].toString();
-                const [read, html, getHtml, text] = single(
-                    [
-                        ...source.matchAll(
-                            /let ([\w$]+)=([\w$]+)\?\.\(\),([\w$]+)=/g,
-                        ),
+            "assistant",
+            /\(0,[\w$]+\.[\w$]+\)\([^,;{}]*\{((?:"text\/(?:plain|html)":[\w$]+,?){2})\},[\w$]+\)\.then\(/,
+            ([, formats]) =>
+                [...formats.matchAll(/"text\/(plain|html)":([\w$]+)/g)].map(
+                    ([, format, name]) => [
+                        name,
+                        format === "plain" ? "checkerText" : "null",
                     ],
-                    "复制助手消息内容",
-                );
-                const [, props] = source.match(/^function [\w$]+\(([\w$]+)\)/);
-                replace(
-                    button,
-                    source,
-                    source
-                        .replace(
-                            "{",
-                            () =>
-                                `{const checkerCopy=${api}.useMessageCopy(${props});`,
-                        )
-                        .replace(
-                            read,
-                            () =>
-                                `let checkerText=checkerCopy.current?.(),${html}=checkerText==null?${getHtml}?.():null,${text}=checkerText??`,
-                        ),
-                );
-            },
-            "chat",
+                ),
         );
         module(
             "消息时间格式模块",
