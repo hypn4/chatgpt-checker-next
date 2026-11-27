@@ -3425,12 +3425,14 @@
                             '.getAttribute("data-chatgpt-copy-reference")',
                         ),
                 );
-                const [, parse, extensions, mdastExtensions] = single(
+                const [, parse, options] = single(
                     [
                         ...messages.source.matchAll(
-                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,\{extensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\],mdastExtensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\]\}\)/g,
+                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,(\{[^;]*?\})\)\.children\b/g,
                         ),
-                    ],
+                    ].filter(([, , options]) =>
+                        options.includes("mdastExtensions:"),
+                    ),
                     "原生 Markdown 解析器",
                 );
                 const [, resolve] = single(
@@ -3443,7 +3445,7 @@
                 );
                 append(
                     messages,
-                    `${api}.register({messageText:${copyText},parseMarkdown:content=>${parse}(content,{extensions:[${extensions}()],mdastExtensions:[${mdastExtensions}()]}),resolveReference:${resolve}});`,
+                    `${api}.register({messageText:${copyText},parseMarkdown:content=>(0,${parse})(content,${options}),resolveReference:${resolve}});`,
                 );
             },
             "chat",
