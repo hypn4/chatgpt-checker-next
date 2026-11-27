@@ -3079,39 +3079,30 @@
             "chat",
         );
 
-        module(
-            "Markdown 序列化模块",
-            (source) =>
-                source.includes('type:"link",url:') &&
-                source.includes("resourceLink:!0"),
-            (markdown) => {
-                const link = exported(markdown, "Markdown 链接", (source) =>
-                    source.includes("resourceLink:!0"),
-                );
-                bindings.markdownLink = [markdown.id, link.exportName];
-                const [, serialize] = single(
-                    [
-                        ...link
-                            .toString()
-                            .matchAll(/\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/g),
-                    ],
-                    "Markdown 序列化接口",
-                );
-                const [name, exportName] = serialize.split(".");
-                const [, id] = single(
-                    [
-                        ...markdown.source.matchAll(
-                            new RegExp(
-                                `${RegExp.escape(name)}=[\\w$]+\\("([^"]+)"\\)`,
-                                "g",
-                            ),
+        const serializeLink = /\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/;
+        const markdownLink = (source) =>
+            source.includes("resourceLink:!0") && serializeLink.test(source);
+        module("Markdown 序列化模块", markdownLink, (markdown) => {
+            const link = exported(markdown, "Markdown 链接", markdownLink);
+            bindings.markdownLink = [markdown.id, link.exportName];
+            const [, serialize] = single(
+                [...link.toString().matchAll(new RegExp(serializeLink, "g"))],
+                "Markdown 序列化接口",
+            );
+            const [name, exportName] = serialize.split(".");
+            const [, id] = single(
+                [
+                    ...markdown.source.matchAll(
+                        new RegExp(
+                            `${RegExp.escape(name)}=[\\w$]+\\("([^"]+)"\\)`,
+                            "g",
                         ),
-                    ],
-                    "Markdown 序列化模块",
-                );
-                bindings.markdown = [id, exportName];
-            },
-        );
+                    ),
+                ],
+                "Markdown 序列化模块",
+            );
+            bindings.markdown = [id, exportName];
+        });
 
         for (const [name, brand] of [
             ["routeScope", "RouteScope"],
