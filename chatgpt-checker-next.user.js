@@ -1467,12 +1467,19 @@
                     return fn(props);
                 };
             },
-            actionRow(props) {
-                const enabled = useEarlyActions();
-                return native.createElement(native.actionRow, {
-                    ...props,
-                    alwaysShowActions: props.alwaysShowActions || enabled,
-                });
+            actionRow(fn) {
+                function ActionRow(props) {
+                    const enabled = useEarlyActions();
+                    return native.createElement(fn, {
+                        ...props,
+                        alwaysShowActions: props.alwaysShowActions || enabled,
+                    });
+                }
+                return (props) =>
+                    native.createElement(
+                        props.getMessageCopy ? ActionRow : fn,
+                        props,
+                    );
             },
             turnActions(fn, actions) {
                 const containsActions = (node) =>
@@ -3498,24 +3505,6 @@
                     [...actions.source.matchAll(/\bisImage:([^,}]+)/g)],
                     "图片操作状态",
                 );
-                const [rowCall, actionRow] = single(
-                    [
-                        ...actions.source.matchAll(
-                            /\(0,[\w$]+\.(?:jsx|jsxs)\)\(([\w$.]+),\{actionRowRef:/g,
-                        ),
-                    ],
-                    "操作栏组件",
-                );
-                replace(
-                    actions,
-                    rowCall,
-                    rowCall
-                        .replace(`(${actionRow},`, () => `(${api}.actionRow,`)
-                        .replace(
-                            "{actionRowRef:",
-                            "{getMessageCopy:checkerCopy,actionRowRef:",
-                        ),
-                );
                 const [assignment] = single(
                     [
                         ...actions.source.matchAll(
@@ -3536,7 +3525,7 @@
                 replace(
                     actions,
                     "copyText:",
-                    "copyText:checkerCopyText?checkerCopyText:",
+                    "getMessageCopy:checkerCopy,copyText:checkerCopyText?checkerCopyText:",
                 );
                 replace(messages, actionsSource, actions.source);
                 const renderTurn = declared(messages, "会话轮次", (source) =>
@@ -3593,7 +3582,7 @@
                 );
                 append(
                     messages,
-                    `${api}.register({actionRow:${actionRow}});${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
+                    `${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
                 );
                 const menu = declared(messages, "消息菜单", (source) =>
                     source.includes(
@@ -3668,6 +3657,11 @@
                             click +
                             source.slice(write.index),
                     );
+                    if (role === "assistant")
+                        append(
+                            button,
+                            `${api}.register({actionRow:${fn}});${fn}=${api}.actionRow(${fn});`,
+                        );
                 },
                 "chat",
             );
