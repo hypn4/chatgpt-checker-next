@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.7.0.0
+// @version      5.7.1.1
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -249,7 +249,7 @@
                 try {
                     for (const entry of matched) {
                         if (entry.after && !entry.after.ready)
-                            throw new Error(`${entry.after.label}尚未挂接`);
+                            throw new Error(`${entry.after.label} 아직 연결되지 않음`);
                         if (entry.id !== undefined && entry.id !== id)
                             throw new Error(`${entry.label}여러 모듈이 일치함`);
                         entry.apply?.(target);
@@ -1467,12 +1467,19 @@
                     return fn(props);
                 };
             },
-            actionRow(props) {
-                const enabled = useEarlyActions();
-                return native.createElement(native.actionRow, {
-                    ...props,
-                    alwaysShowActions: props.alwaysShowActions || enabled,
-                });
+            actionRow(fn) {
+                function ActionRow(props) {
+                    const enabled = useEarlyActions();
+                    return native.createElement(fn, {
+                        ...props,
+                        alwaysShowActions: props.alwaysShowActions || enabled,
+                    });
+                }
+                return (props) =>
+                    native.createElement(
+                        props.getMessageCopy ? ActionRow : fn,
+                        props,
+                    );
             },
             turnActions(fn, actions) {
                 const containsActions = (node) =>
@@ -2014,7 +2021,7 @@
                         ) ??
                         assistantItem.latestMessageId ??
                         assistantItem.messageId;
-                    if (!mapping?.[id]) throw new Error("本轮消息尚未载入");
+                    if (!mapping?.[id]) throw new Error("현재 턴의 메시지를 아직 불러오지 못했습니다.");
                     const items = [];
                     for (
                         let node = mapping[id];
@@ -3079,39 +3086,30 @@
             "chat",
         );
 
-        module(
-            "Markdown 직렬화 모듈",
-            (source) =>
-                source.includes('type:"link",url:') &&
-                source.includes("resourceLink:!0"),
-            (markdown) => {
-                const link = exported(markdown, "Markdown 링크", (source) =>
-                    source.includes("resourceLink:!0"),
-                );
-                bindings.markdownLink = [markdown.id, link.exportName];
-                const [, serialize] = single(
-                    [
-                        ...link
-                            .toString()
-                            .matchAll(/\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/g),
-                    ],
-                    "Markdown 직렬화 인터페이스",
-                );
-                const [name, exportName] = serialize.split(".");
-                const [, id] = single(
-                    [
-                        ...markdown.source.matchAll(
-                            new RegExp(
-                                `${RegExp.escape(name)}=[\\w$]+\\("([^"]+)"\\)`,
-                                "g",
-                            ),
+        const serializeLink = /\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/;
+        const markdownLink = (source) =>
+            source.includes("resourceLink:!0") && serializeLink.test(source);
+        module("Markdown 직렬화 모듈", markdownLink, (markdown) => {
+            const link = exported(markdown, "Markdown 링크", markdownLink);
+            bindings.markdownLink = [markdown.id, link.exportName];
+            const [, serialize] = single(
+                [...link.toString().matchAll(new RegExp(serializeLink, "g"))],
+                "Markdown 직렬화 인터페이스",
+            );
+            const [name, exportName] = serialize.split(".");
+            const [, id] = single(
+                [
+                    ...markdown.source.matchAll(
+                        new RegExp(
+                            `${RegExp.escape(name)}=[\\w$]+\\("([^"]+)"\\)`,
+                            "g",
                         ),
-                    ],
-                    "Markdown 직렬화 모듈",
-                );
-                bindings.markdown = [id, exportName];
-            },
-        );
+                    ),
+                ],
+                "Markdown 직렬화 모듈",
+            );
+            bindings.markdown = [id, exportName];
+        });
 
         for (const [name, brand] of [
             ["routeScope", "RouteScope"],
@@ -3427,12 +3425,14 @@
                             '.getAttribute("data-chatgpt-copy-reference")',
                         ),
                 );
-                const [, parse, extensions, mdastExtensions] = single(
+                const [, parse, options] = single(
                     [
                         ...messages.source.matchAll(
-                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,\{extensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\],mdastExtensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\]\}\)/g,
+                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,(\{[^;]*?\})\)\.children\b/g,
                         ),
-                    ],
+                    ].filter(([, , options]) =>
+                        options.includes("mdastExtensions:"),
+                    ),
                     "네이티브 Markdown 파서",
                 );
                 const [, resolve] = single(
@@ -3445,7 +3445,7 @@
                 );
                 append(
                     messages,
-                    `${api}.register({messageText:${copyText},parseMarkdown:content=>${parse}(content,{extensions:[${extensions}()],mdastExtensions:[${mdastExtensions}()]}),resolveReference:${resolve}});`,
+                    `${api}.register({messageText:${copyText},parseMarkdown:content=>(0,${parse})(content,${options}),resolveReference:${resolve}});`,
                 );
             },
             "chat",
@@ -3507,24 +3507,6 @@
                     [...actions.source.matchAll(/\bisImage:([^,}]+)/g)],
                     "이미지 작업 상태",
                 );
-                const [rowCall, actionRow] = single(
-                    [
-                        ...actions.source.matchAll(
-                            /\(0,[\w$]+\.(?:jsx|jsxs)\)\(([\w$.]+),\{actionRowRef:/g,
-                        ),
-                    ],
-                    "액션 바 컴포넌트",
-                );
-                replace(
-                    actions,
-                    rowCall,
-                    rowCall
-                        .replace(`(${actionRow},`, () => `(${api}.actionRow,`)
-                        .replace(
-                            "{actionRowRef:",
-                            "{getMessageCopy:checkerCopy,actionRowRef:",
-                        ),
-                );
                 const [assignment] = single(
                     [
                         ...actions.source.matchAll(
@@ -3545,7 +3527,7 @@
                 replace(
                     actions,
                     "copyText:",
-                    "copyText:checkerCopyText?checkerCopyText:",
+                    "getMessageCopy:checkerCopy,copyText:checkerCopyText?checkerCopyText:",
                 );
                 replace(messages, actionsSource, actions.source);
                 const renderTurn = declared(messages, "대화 턴", (source) =>
@@ -3573,7 +3555,7 @@
                             ),
                         ),
                     ],
-                    "操作栏条件模块导入",
+                    "액션 바 조건 모듈 가져오기",
                 );
                 const check = `(0,${namespace}.${exportName})`;
                 const [condition] = single(
@@ -3602,7 +3584,7 @@
                 );
                 append(
                     messages,
-                    `${api}.register({actionRow:${actionRow}});${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
+                    `${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
                 );
                 const menu = declared(messages, "메시지 메뉴", (source) =>
                     source.includes(
@@ -3623,88 +3605,86 @@
             contentModule,
         );
 
-        module(
-            "用户消息复制按钮",
-            (source) =>
-                source.includes('surface:"user_message"') &&
-                source.includes("preserveWhitespaceInHtml:"),
-            (button) => {
-                const fn = declared(
-                    button,
-                    "用户消息复制",
-                    (source) =>
-                        source.includes('surface:"user_message"') &&
-                        source.includes("preserveWhitespaceInHtml:"),
-                );
-                const source = declarations(button)[fn].toString();
-                const [start] = single(
-                    [
-                        ...source.matchAll(
-                            /let [\w$]+=function\([\w$]+\)\{let\{contentRef:/g,
-                        ),
-                    ],
-                    "复制用户消息内容",
-                );
-                const [, props] = source.match(/^function [\w$]+\(([\w$]+)\)/);
-                replace(
-                    button,
-                    source,
-                    source
-                        .replace(
-                            "{",
-                            () =>
-                                `{const checkerCopy=${api}.useMessageCopy(${props});`,
-                        )
-                        .replace(start, () =>
-                            start.replace(
-                                "=function",
-                                "=checkerCopy.current?.()??function",
-                            ),
-                        ),
-                );
-            },
-            "chat",
+        const copyButton = (label, role, writeCall, getFields) => {
+            const surface = `surface:"${role}_message"`;
+            const matches = (source) =>
+                source.includes(surface) && writeCall.test(source);
+            module(
+                label,
+                matches,
+                (button) => {
+                    const fn = declared(button, label, matches);
+                    const source = declarations(button)[fn].toString();
+                    const write = single(
+                        [...source.matchAll(new RegExp(writeCall, "g"))],
+                        "메시지 내용 쓰기",
+                    );
+                    const start = source.lastIndexOf(surface, write.index);
+                    if (start < 0) throw new Error("복사 동작을 찾을 수 없음");
+                    let click = source.slice(start, write.index);
+                    for (const [name, value] of getFields(write)) {
+                        const [assignment] = single(
+                            [
+                                ...click.matchAll(
+                                    new RegExp(
+                                        `(?:;(?:let|const|var) |,)${RegExp.escape(name)}=(?!=)`,
+                                        "g",
+                                    ),
+                                ),
+                            ],
+                            label,
+                        );
+                        click = click.replace(
+                            assignment,
+                            () => `${assignment}checkerText!=null?${value}:`,
+                        );
+                    }
+                    click = click.replace(
+                        ";",
+                        ";const checkerText=checkerCopy.current?.();",
+                    );
+                    const [, props] = source.match(
+                        /^function [\w$]+\(([\w$]+)\)/,
+                    );
+                    replace(
+                        button,
+                        source,
+                        source
+                            .slice(0, start)
+                            .replace(
+                                "{",
+                                () =>
+                                    `{const checkerCopy=${api}.useMessageCopy(${props});`,
+                            ) +
+                            click +
+                            source.slice(write.index),
+                    );
+                    if (role === "assistant")
+                        append(
+                            button,
+                            `${api}.register({actionRow:${fn}});${fn}=${api}.actionRow(${fn});`,
+                        );
+                },
+                "chat",
+            );
+        };
+        copyButton(
+            "사용자 메시지 복사 버튼",
+            "user",
+            /;\(0,[\w$]+\.[\w$]+\)\(([\w$]+),[\w$]+\)\.then\(/,
+            ([, payload]) => [[payload, "checkerText"]],
         );
-        module(
-            "助手消息复制按钮",
-            (source) =>
-                source.includes('surface:"assistant_message"') &&
-                source.includes("getCopyHtml:"),
-            (button) => {
-                const fn = declared(
-                    button,
-                    "助手消息复制",
-                    (source) =>
-                        source.includes('surface:"assistant_message"') &&
-                        source.includes("getCopyHtml:"),
-                );
-                const source = declarations(button)[fn].toString();
-                const [read, html, getHtml, text] = single(
-                    [
-                        ...source.matchAll(
-                            /let ([\w$]+)=([\w$]+)\?\.\(\),([\w$]+)=/g,
-                        ),
+        copyButton(
+            "어시스턴트 메시지 복사 버튼",
+            "assistant",
+            /\(0,[\w$]+\.[\w$]+\)\([^,;{}]*\{((?:"text\/(?:plain|html)":[\w$]+,?){2})\},[\w$]+\)\.then\(/,
+            ([, formats]) =>
+                [...formats.matchAll(/"text\/(plain|html)":([\w$]+)/g)].map(
+                    ([, format, name]) => [
+                        name,
+                        format === "plain" ? "checkerText" : "null",
                     ],
-                    "复制助手消息内容",
-                );
-                const [, props] = source.match(/^function [\w$]+\(([\w$]+)\)/);
-                replace(
-                    button,
-                    source,
-                    source
-                        .replace(
-                            "{",
-                            () =>
-                                `{const checkerCopy=${api}.useMessageCopy(${props});`,
-                        )
-                        .replace(
-                            read,
-                            () =>
-                                `let checkerText=checkerCopy.current?.(),${html}=checkerText==null?${getHtml}?.():null,${text}=checkerText??`,
-                        ),
-                );
-            },
-            "chat",
+                ),
         );
         module(
             "메시지 시간 형식 모듈",
@@ -4008,15 +3988,15 @@
 
     function getChatgptModuleItems(page) {
         const items = ["런타임 모델 전환"];
-        if (chatgptNewTabEnabled) items.push("中键打开链接");
+        if (chatgptNewTabEnabled) items.push("가운데 클릭으로 링크 열기");
         if (page && chatgptCopyButtonEnabled) items.push("전체 대화 복사");
         if (page !== "dot" && chatgptPasteMode !== "native")
-            items.push(`粘贴输入：${CHATGPT_PASTE_MODES[chatgptPasteMode]}`);
+            items.push(`붙여넣기 방식:${CHATGPT_PASTE_MODES[chatgptPasteMode]}`);
         if (page === "chat") {
             if (chatgptMessageInfoEnabled) items.push("시간 및 모델 표시");
             if (chatgptEarlyActionsEnabled) items.push("액션 바 미리 표시");
-            if (chatgptApprovalEnabled) items.push("自动批准工具");
-            if (chatgptAutoCollapseEnabled) items.push("收起分析");
+            if (chatgptApprovalEnabled) items.push("도구 요청 자동 승인");
+            if (chatgptAutoCollapseEnabled) items.push("분석 내용 접기");
         }
         if (chatgptFakePlanEnabled)
             items.push(`플랜 표시:${chatgptFakePlanValue}`);
@@ -4707,7 +4687,7 @@
                 </label>
             </div>
             <div id="chatgpt-copy-raw-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>- 复制原始格式
+                <span>- 원본 형식으로 복사
                 <span id="chatgpt-copy-raw-tooltip" style="
                     cursor: pointer;
                     font-size: 12px;
@@ -4747,7 +4727,7 @@
                 </label>
             </div>
             <div id="chatgpt-copy-details-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>- 复制思考内容
+                <span>- 추론 내용 복사
                 <span id="chatgpt-copy-details-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -4788,7 +4768,7 @@
                 </label>
             </div>
             <div id="chatgpt-paste-mode-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <label for="chatgpt-paste-mode-select">粘贴输入
+                <label for="chatgpt-paste-mode-select">붙여넣기 방식
                 <span id="chatgpt-paste-mode-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -4823,7 +4803,7 @@
                 </select>
             </div>
             <div id="chatgpt-auto-collapse-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>收起分析
+                <span>분석 내용 접기
                 <span id="chatgpt-auto-collapse-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -4864,7 +4844,7 @@
                 </label>
             </div>
             <div id="chatgpt-approval-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>自动批准工具
+                <span>도구 요청 자동 승인
                 <span id="chatgpt-approval-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -4987,7 +4967,7 @@
                 </label>
             </div>
             <div id="chatgpt-new-tab-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>中键打开链接
+                <span>가운데 클릭으로 링크 열기
                 <span id="chatgpt-new-tab-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -5398,7 +5378,7 @@
 
         const chatgptCopyDetailsTooltipBox = createTooltip(
             "chatgpt-copy-details-tooltip-box",
-            "复制时包含思考与工具调用内容。",
+            "복사 시 추론 내용과 도구 호출 내용을 포함합니다.",
         );
 
         const chatgptMessageInfoTooltipBox = createTooltip(
@@ -5422,12 +5402,12 @@
 
         const chatgptAutoCollapseTooltipBox = createTooltip(
             "chatgpt-auto-collapse-tooltip-box",
-            "折叠分析代码块。",
+            "분석 코드 블록을 접습니다.",
         );
 
         const chatgptNewTabTooltipBox = createTooltip(
             "chatgpt-new-tab-tooltip-box",
-            "让侧栏和菜单支持中键和Ctrl单击。",
+            "사이드바와 메뉴에서 가운데 클릭 또는 Ctrl+클릭으로 새 탭을 엽니다.",
         );
 
         const chatgptSelectionPopoverTooltipBox = createTooltip(
