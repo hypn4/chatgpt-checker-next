@@ -4,7 +4,7 @@
 // @homepage     https://github.com/hypn4/chatgpt-checker-next
 // @author       zetaloop, hypn4 (한국어 현지화)
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.6.4.1
+// @version      5.7.1.1
 // @description  ChatGPT와 Codex의 계정, 사용량 및 서비스 정보를 확인합니다.
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -55,7 +55,6 @@
     const CHATGPT_APPROVAL_KEY = "checker-next-chatgpt-approval";
     const CHATGPT_APPROVAL_EVENT = "checker-next-approval";
     const CHATGPT_AUTO_COLLAPSE_KEY = "checker-next-chatgpt-auto-collapse";
-    const CHATGPT_AUTO_COLLAPSE_EVENT = "checker-next-auto-collapse";
     const CHATGPT_SELECTION_POPOVER_DISABLED_KEY =
         "checker-next-chatgpt-selection-popover-disabled";
     const CHATGPT_RUNTIME_MODEL_STATE_EVENT =
@@ -245,15 +244,12 @@
                 scheduled = true;
                 queueMicrotask(publish);
             };
-            const patch = (id, factory) => {
-                if (processed.has(factory)) return processed.get(factory);
-                const source = factory.toString();
+            const apply = (id, factory, source, matched) => {
                 const target = { id, source };
-                const matched = entries.filter((entry) =>
-                    entry.predicate(source),
-                );
                 try {
                     for (const entry of matched) {
+                        if (entry.after && !entry.after.ready)
+                            throw new Error(`${entry.after.label} 아직 연결되지 않음`);
                         if (entry.id !== undefined && entry.id !== id)
                             throw new Error(`${entry.label}여러 모듈이 일치함`);
                         entry.apply?.(target);
@@ -278,6 +274,8 @@
                                 schedule();
                             });
                     }
+                    for (const entry of matched)
+                        for (const finish of entry.consumers ?? []) finish();
                     if (matched.length) schedule();
                     return result;
                 } catch (error) {
@@ -289,6 +287,30 @@
                     schedule();
                     return factory;
                 }
+            };
+            const patch = (id, factory) => {
+                if (processed.has(factory)) return processed.get(factory);
+                const source = factory.toString();
+                const matched = entries.filter((entry) =>
+                    entry.predicate(source),
+                );
+                const dependency = matched.find(
+                    (entry) => entry.after && !entry.after.ready,
+                )?.after;
+                if (!dependency) return apply(id, factory, source, matched);
+                dependency.consumers ??= new Set();
+                let result;
+                const finish = () => {
+                    dependency.consumers.delete(finish);
+                    result = apply(id, factory, source, matched);
+                };
+                dependency.consumers.add(finish);
+                function deferred(...args) {
+                    if (!result) finish();
+                    return Reflect.apply(result, this, args);
+                }
+                processed.set(factory, deferred);
+                return deferred;
             };
             for (const [id, factory] of Object.entries(require.m))
                 require.m[id] = patch(id, factory);
@@ -496,15 +518,6 @@
                 getEarlyActionsEnabled,
                 getEarlyActionsEnabled,
             );
-        const subscribeAutoCollapse = (listener) => {
-            pageWindow.addEventListener(CHATGPT_AUTO_COLLAPSE_EVENT, listener);
-            return () =>
-                pageWindow.removeEventListener(
-                    CHATGPT_AUTO_COLLAPSE_EVENT,
-                    listener,
-                );
-        };
-        const getAutoCollapse = () => chatgptAutoCollapseEnabled;
         const after = (fn, callback) => {
             function wrapped(...args) {
                 const result = fn.apply(this, args);
@@ -1356,22 +1369,10 @@
             },
             analysis(fn) {
                 return function (props) {
-                    const enabled = native.useSyncExternalStore(
-                        subscribeAutoCollapse,
-                        getAutoCollapse,
-                        getAutoCollapse,
-                    );
                     return native.createElement(
                         fn,
-                        enabled
-                            ? {
-                                  ...props,
-                                  allowCollapseBeforeFinal: true,
-                                  preventAutoCollapse: false,
-                                  waitForToolIconExit: false,
-                                  forceExpanded: false,
-                                  disableCollapse: false,
-                              }
+                        chatgptAutoCollapseEnabled
+                            ? { ...props, defaultExpanded: false }
                             : props,
                     );
                 };
@@ -1466,12 +1467,19 @@
                     return fn(props);
                 };
             },
-            actionRow(props) {
-                const enabled = useEarlyActions();
-                return native.createElement(native.actionRow, {
-                    ...props,
-                    alwaysShowActions: props.alwaysShowActions || enabled,
-                });
+            actionRow(fn) {
+                function ActionRow(props) {
+                    const enabled = useEarlyActions();
+                    return native.createElement(fn, {
+                        ...props,
+                        alwaysShowActions: props.alwaysShowActions || enabled,
+                    });
+                }
+                return (props) =>
+                    native.createElement(
+                        props.getMessageCopy ? ActionRow : fn,
+                        props,
+                    );
             },
             turnActions(fn, actions) {
                 const containsActions = (node) =>
@@ -1980,6 +1988,64 @@
                     native.turns(scope.get, conversation.id)
                 );
             },
+            useMessageCopy(props) {
+                const ref = native.useRef(null);
+                ref.current = props.getMessageCopy;
+                return ref;
+            },
+            copyMessage({
+                item,
+                assistantItem,
+                conversationId,
+                favoriteSourceMessageIds,
+            }) {
+                if (
+                    (!item && !assistantItem) ||
+                    (!chatgptCopyRawEnabled &&
+                        !(assistantItem && chatgptCopyDetailsEnabled))
+                )
+                    return;
+                try {
+                    if (!assistantItem || !chatgptCopyDetailsEnabled)
+                        return bridge.getMessageText(
+                            item ?? assistantItem,
+                            conversationId,
+                        );
+                    const mapping = appScope.get(
+                        native.mapping,
+                        conversationId,
+                    );
+                    const id =
+                        favoriteSourceMessageIds?.findLast(
+                            (id) => mapping?.[id],
+                        ) ??
+                        assistantItem.latestMessageId ??
+                        assistantItem.messageId;
+                    if (!mapping?.[id]) throw new Error("현재 턴의 메시지를 아직 불러오지 못했습니다.");
+                    const items = [];
+                    for (
+                        let node = mapping[id];
+                        node;
+                        node = mapping[node.parent]
+                    ) {
+                        const source = node.message;
+                        if (source?.author.role === "user") break;
+                        if (["assistant", "tool"].includes(source?.author.role))
+                            items.push(
+                                bridge.getMessageText(
+                                    { source },
+                                    conversationId,
+                                ),
+                            );
+                    }
+                    return (
+                        items.reverse().filter(Boolean).join("\n\n") ||
+                        undefined
+                    );
+                } catch (error) {
+                    report(error);
+                }
+            },
             getMessageText(item, conversationId) {
                 if (item.source) {
                     const message = item.source;
@@ -2285,8 +2351,11 @@
     function createChatgptModulePatches() {
         const patches = [];
         const bindings = {};
-        const module = (label, predicate, apply, page) =>
-            patches.push({ label, predicate, apply, page });
+        const module = (label, predicate, apply, page, after) => {
+            const entry = { label, predicate, apply, page, after };
+            patches.push(entry);
+            return entry;
+        };
         const single = (items, label) => {
             if (items.length !== 1)
                 throw new Error(`${label}에서 일치한 결과: ${items.length} 개`);
@@ -2790,22 +2859,17 @@
 
         module(
             "분석 내용 모듈",
-            (source) =>
-                /\{[^{}]*\ballowCollapseBeforeFinal:[^{}]*\}=[\w$]+/.test(
-                    source,
-                ) &&
-                source.includes("preventAutoCollapse:") &&
-                source.includes("agentActivityProps:"),
+            (source) => source.includes('"chatgpt.pythonExecution.status"'),
             (analysis) => {
-                const activity = exported(
+                const activity = declared(
                     analysis,
                     "분석 내용 컴포넌트",
                     (source) =>
-                        /\{[^{}]*\ballowCollapseBeforeFinal:[^{}]*\}=[\w$]+/.test(
-                            source,
-                        ) && source.includes("persistedCollapsed:"),
+                        source.includes("defaultExpanded:") &&
+                        source.includes(".code.length") &&
+                        source.includes(".output.length"),
                 );
-                wrap(analysis, activity, `${api}.analysis`);
+                append(analysis, `${activity}=${api}.analysis(${activity});`);
             },
             "chat",
         );
@@ -2824,7 +2888,7 @@
             },
         );
 
-        module(
+        const contentModule = module(
             "대화 콘텐츠 모듈",
             (source) =>
                 source.includes("context_truncation_continuation:") &&
@@ -2884,6 +2948,7 @@
                 const actions = exported(content, "턴 액션 바 조건", (source) =>
                     source.includes(".suppressTurnActions"),
                 );
+                bindings.turnActions = [content.id, actions.exportName];
                 const [state] = single(
                     [
                         ...actions
@@ -3021,39 +3086,30 @@
             "chat",
         );
 
-        module(
-            "Markdown 직렬화 모듈",
-            (source) =>
-                source.includes('type:"link",url:') &&
-                source.includes("resourceLink:!0"),
-            (markdown) => {
-                const link = exported(markdown, "Markdown 링크", (source) =>
-                    source.includes("resourceLink:!0"),
-                );
-                bindings.markdownLink = [markdown.id, link.exportName];
-                const [, serialize] = single(
-                    [
-                        ...link
-                            .toString()
-                            .matchAll(/\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/g),
-                    ],
-                    "Markdown 직렬화 인터페이스",
-                );
-                const [name, exportName] = serialize.split(".");
-                const [, id] = single(
-                    [
-                        ...markdown.source.matchAll(
-                            new RegExp(
-                                `${RegExp.escape(name)}=[\\w$]+\\("([^"]+)"\\)`,
-                                "g",
-                            ),
+        const serializeLink = /\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/;
+        const markdownLink = (source) =>
+            source.includes("resourceLink:!0") && serializeLink.test(source);
+        module("Markdown 직렬화 모듈", markdownLink, (markdown) => {
+            const link = exported(markdown, "Markdown 링크", markdownLink);
+            bindings.markdownLink = [markdown.id, link.exportName];
+            const [, serialize] = single(
+                [...link.toString().matchAll(new RegExp(serializeLink, "g"))],
+                "Markdown 직렬화 인터페이스",
+            );
+            const [name, exportName] = serialize.split(".");
+            const [, id] = single(
+                [
+                    ...markdown.source.matchAll(
+                        new RegExp(
+                            `${RegExp.escape(name)}=[\\w$]+\\("([^"]+)"\\)`,
+                            "g",
                         ),
-                    ],
-                    "Markdown 직렬화 모듈",
-                );
-                bindings.markdown = [id, exportName];
-            },
-        );
+                    ),
+                ],
+                "Markdown 직렬화 모듈",
+            );
+            bindings.markdown = [id, exportName];
+        });
 
         for (const [name, brand] of [
             ["routeScope", "RouteScope"],
@@ -3369,12 +3425,14 @@
                             '.getAttribute("data-chatgpt-copy-reference")',
                         ),
                 );
-                const [, parse, extensions, mdastExtensions] = single(
+                const [, parse, options] = single(
                     [
                         ...messages.source.matchAll(
-                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,\{extensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\],mdastExtensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\]\}\)/g,
+                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,(\{[^;]*?\})\)\.children\b/g,
                         ),
-                    ],
+                    ].filter(([, , options]) =>
+                        options.includes("mdastExtensions:"),
+                    ),
                     "네이티브 Markdown 파서",
                 );
                 const [, resolve] = single(
@@ -3387,7 +3445,7 @@
                 );
                 append(
                     messages,
-                    `${api}.register({messageText:${copyText},parseMarkdown:content=>${parse}(content,{extensions:[${extensions}()],mdastExtensions:[${mdastExtensions}()]}),resolveReference:${resolve}});`,
+                    `${api}.register({messageText:${copyText},parseMarkdown:content=>(0,${parse})(content,${options}),resolveReference:${resolve}});`,
                 );
             },
             "chat",
@@ -3416,6 +3474,27 @@
                 const actionsSource =
                     declarations(messages)[renderActions].toString();
                 const actions = { source: actionsSource };
+                const copyProps = (source) => {
+                    const [, props] = source.match(
+                        /^function [\w$]+\(([\w$]+)\)/,
+                    );
+                    return source.replace(
+                        "{",
+                        () =>
+                            `{const checkerCopy=()=>${api}.copyMessage(${props});`,
+                    );
+                };
+                const userSource =
+                    declarations(messages)[renderMessage].toString();
+                replace(
+                    messages,
+                    userSource,
+                    copyProps(userSource).replaceAll(
+                        "copyContentRef:",
+                        "getMessageCopy:checkerCopy,copyContentRef:",
+                    ),
+                );
+                actions.source = copyProps(actions.source);
                 const [, item] = single(
                     [...actions.source.matchAll(/assistantItem:([\w$]+)/g)],
                     "어시스턴트 메시지 매개변수",
@@ -3427,22 +3506,6 @@
                 const [, isImage] = single(
                     [...actions.source.matchAll(/\bisImage:([^,}]+)/g)],
                     "이미지 작업 상태",
-                );
-                const [rowCall, actionRow] = single(
-                    [
-                        ...actions.source.matchAll(
-                            /\(0,[\w$]+\.(?:jsx|jsxs)\)\(([\w$.]+),\{actionRowRef:/g,
-                        ),
-                    ],
-                    "액션 바 컴포넌트",
-                );
-                replace(
-                    actions,
-                    rowCall,
-                    rowCall.replace(
-                        `(${actionRow},`,
-                        () => `(${api}.actionRow,`,
-                    ),
                 );
                 const [assignment] = single(
                     [
@@ -3464,7 +3527,7 @@
                 replace(
                     actions,
                     "copyText:",
-                    "copyText:checkerCopyText?checkerCopyText:",
+                    "getMessageCopy:checkerCopy,copyText:checkerCopyText?checkerCopyText:",
                 );
                 replace(messages, actionsSource, actions.source);
                 const renderTurn = declared(messages, "대화 턴", (source) =>
@@ -3479,11 +3542,27 @@
                     ],
                     "턴 메시지 출처",
                 );
-                const [condition, check] = single(
+                const [moduleId, exportName] = bindings.turnActions;
+                const [, require] = messages.source.match(
+                    /^[^(]+\([^,]+,[^,]+,([^)]*)\)\{/,
+                );
+                const [, namespace] = single(
+                    [
+                        ...messages.source.matchAll(
+                            new RegExp(
+                                `([\\w$]+)=${RegExp.escape(require)}\\("${RegExp.escape(moduleId)}"\\)`,
+                                "g",
+                            ),
+                        ),
+                    ],
+                    "액션 바 조건 모듈 가져오기",
+                );
+                const check = `(0,${namespace}.${exportName})`;
+                const [condition] = single(
                     [
                         ...turn.matchAll(
                             new RegExp(
-                                `(\\(0,[\\w$]+\\.[\\w$]+\\))\\(${RegExp.escape(turnValue)}\\)`,
+                                `${RegExp.escape(check)}\\(${RegExp.escape(turnValue)}\\)`,
                                 "g",
                             ),
                         ),
@@ -3505,7 +3584,7 @@
                 );
                 append(
                     messages,
-                    `${api}.register({actionRow:${actionRow}});${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
+                    `${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
                 );
                 const menu = declared(messages, "메시지 메뉴", (source) =>
                     source.includes(
@@ -3523,8 +3602,90 @@
                 );
             },
             "chat",
+            contentModule,
         );
 
+        const copyButton = (label, role, writeCall, getFields) => {
+            const surface = `surface:"${role}_message"`;
+            const matches = (source) =>
+                source.includes(surface) && writeCall.test(source);
+            module(
+                label,
+                matches,
+                (button) => {
+                    const fn = declared(button, label, matches);
+                    const source = declarations(button)[fn].toString();
+                    const write = single(
+                        [...source.matchAll(new RegExp(writeCall, "g"))],
+                        "메시지 내용 쓰기",
+                    );
+                    const start = source.lastIndexOf(surface, write.index);
+                    if (start < 0) throw new Error("복사 동작을 찾을 수 없음");
+                    let click = source.slice(start, write.index);
+                    for (const [name, value] of getFields(write)) {
+                        const [assignment] = single(
+                            [
+                                ...click.matchAll(
+                                    new RegExp(
+                                        `(?:;(?:let|const|var) |,)${RegExp.escape(name)}=(?!=)`,
+                                        "g",
+                                    ),
+                                ),
+                            ],
+                            label,
+                        );
+                        click = click.replace(
+                            assignment,
+                            () => `${assignment}checkerText!=null?${value}:`,
+                        );
+                    }
+                    click = click.replace(
+                        ";",
+                        ";const checkerText=checkerCopy.current?.();",
+                    );
+                    const [, props] = source.match(
+                        /^function [\w$]+\(([\w$]+)\)/,
+                    );
+                    replace(
+                        button,
+                        source,
+                        source
+                            .slice(0, start)
+                            .replace(
+                                "{",
+                                () =>
+                                    `{const checkerCopy=${api}.useMessageCopy(${props});`,
+                            ) +
+                            click +
+                            source.slice(write.index),
+                    );
+                    if (role === "assistant")
+                        append(
+                            button,
+                            `${api}.register({actionRow:${fn}});${fn}=${api}.actionRow(${fn});`,
+                        );
+                },
+                "chat",
+            );
+        };
+        copyButton(
+            "사용자 메시지 복사 버튼",
+            "user",
+            /;\(0,[\w$]+\.[\w$]+\)\(([\w$]+),[\w$]+\)\.then\(/,
+            ([, payload]) => [[payload, "checkerText"]],
+        );
+        copyButton(
+            "어시스턴트 메시지 복사 버튼",
+            "assistant",
+            /\(0,[\w$]+\.[\w$]+\)\([^,;{}]*\{((?:"text\/(?:plain|html)":[\w$]+,?){2})\},[\w$]+\)\.then\(/,
+            ([, formats]) =>
+                [...formats.matchAll(/"text\/(plain|html)":([\w$]+)/g)].map(
+                    ([, format, name]) => [
+                        name,
+                        format === "plain" ? "checkerText" : "null",
+                    ],
+                ),
+        );
         module(
             "메시지 시간 형식 모듈",
             (source) =>
@@ -3827,15 +3988,15 @@
 
     function getChatgptModuleItems(page) {
         const items = ["런타임 모델 전환"];
-        if (chatgptNewTabEnabled) items.push("가운데 클릭으로 새 탭 열기");
+        if (chatgptNewTabEnabled) items.push("가운데 클릭으로 링크 열기");
         if (page && chatgptCopyButtonEnabled) items.push("전체 대화 복사");
         if (page !== "dot" && chatgptPasteMode !== "native")
-            items.push(`텍스트 붙여넣기:${CHATGPT_PASTE_MODES[chatgptPasteMode]}`);
+            items.push(`붙여넣기 방식:${CHATGPT_PASTE_MODES[chatgptPasteMode]}`);
         if (page === "chat") {
             if (chatgptMessageInfoEnabled) items.push("시간 및 모델 표시");
             if (chatgptEarlyActionsEnabled) items.push("액션 바 미리 표시");
             if (chatgptApprovalEnabled) items.push("도구 요청 자동 승인");
-            if (chatgptAutoCollapseEnabled) items.push("분석 내용 자동 접기");
+            if (chatgptAutoCollapseEnabled) items.push("분석 내용 접기");
         }
         if (chatgptFakePlanEnabled)
             items.push(`플랜 표시:${chatgptFakePlanValue}`);
@@ -4484,41 +4645,6 @@
                     "></span>
                 </label>
             </div>
-            <div id="chatgpt-paste-mode-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <label for="chatgpt-paste-mode-select">텍스트 붙여넣기
-                <span id="chatgpt-paste-mode-tooltip" style="
-                    cursor: pointer;
-                    color: #fff;
-                    font-size: 12px;
-                    display: inline-block;
-                    width: 14px;
-                    height: 14px;
-                    line-height: 14px;
-                    text-align: center;
-                    border-radius: 50%;
-                    border: 1px solid #fff;
-                    margin-left: 3px;
-                ">?</span></label>
-                <select id="chatgpt-paste-mode-select" style="
-                    background-color: #333;
-                    color: #fff;
-                    border: 0px;
-                    border-radius: 4px;
-                    padding: 4px 8px 4px 8px;
-                    font-size: 11px;
-                    cursor: pointer;
-                    outline: none;
-                    line-height: 1em;
-                    box-sizing: border-box;
-                ">
-                    ${Object.entries(CHATGPT_PASTE_MODES)
-                        .map(
-                            ([value, label]) =>
-                                `<option value="${value}">${label}</option>`,
-                        )
-                        .join("")}
-                </select>
-            </div>
             <div id="chatgpt-copy-button-container" style="display: flex; align-items: center; justify-content: space-between;">
                 <span>복사 버튼
                 <span id="chatgpt-copy-button-tooltip" style="
@@ -4561,7 +4687,7 @@
                 </label>
             </div>
             <div id="chatgpt-copy-raw-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>원본 형식으로 복사
+                <span>- 원본 형식으로 복사
                 <span id="chatgpt-copy-raw-tooltip" style="
                     cursor: pointer;
                     font-size: 12px;
@@ -4601,7 +4727,7 @@
                 </label>
             </div>
             <div id="chatgpt-copy-details-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>추론 내용 복사
+                <span>- 추론 내용 복사
                 <span id="chatgpt-copy-details-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -4629,6 +4755,123 @@
                         border-radius: 16px;
                     "></span>
                     <span id="chatgpt-copy-details-slider-dot" style="
+                        position: absolute;
+                        content: '';
+                        height: 10px;
+                        width: 10px;
+                        left: 3px;
+                        bottom: 3px;
+                        background-color: white;
+                        transition: 0.3s;
+                        border-radius: 50%;
+                    "></span>
+                </label>
+            </div>
+            <div id="chatgpt-paste-mode-container" style="display: flex; align-items: center; justify-content: space-between;">
+                <label for="chatgpt-paste-mode-select">붙여넣기 방식
+                <span id="chatgpt-paste-mode-tooltip" style="
+                    cursor: pointer;
+                    color: #fff;
+                    font-size: 12px;
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    line-height: 14px;
+                    text-align: center;
+                    border-radius: 50%;
+                    border: 1px solid #fff;
+                    margin-left: 3px;
+                ">?</span></label>
+                <select id="chatgpt-paste-mode-select" style="
+                    background-color: #333;
+                    color: #fff;
+                    border: 0px;
+                    border-radius: 4px;
+                    padding: 4px 8px 4px 8px;
+                    font-size: 11px;
+                    cursor: pointer;
+                    outline: none;
+                    line-height: 1em;
+                    box-sizing: border-box;
+                ">
+                    ${Object.entries(CHATGPT_PASTE_MODES)
+                        .map(
+                            ([value, label]) =>
+                                `<option value="${value}">${label}</option>`,
+                        )
+                        .join("")}
+                </select>
+            </div>
+            <div id="chatgpt-auto-collapse-container" style="display: flex; align-items: center; justify-content: space-between;">
+                <span>분석 내용 접기
+                <span id="chatgpt-auto-collapse-tooltip" style="
+                    cursor: pointer;
+                    color: #fff;
+                    font-size: 12px;
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    line-height: 14px;
+                    text-align: center;
+                    border-radius: 50%;
+                    border: 1px solid #fff;
+                    margin-left: 3px;
+                ">?</span></span>
+                <label style="position: relative; display: inline-block; width: 28px; height: 16px; cursor: pointer;">
+                    <input type="checkbox" id="chatgpt-auto-collapse-toggle" style="opacity: 0; width: 0; height: 0;">
+                    <span id="chatgpt-auto-collapse-slider" style="
+                        position: absolute;
+                        cursor: pointer;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-color: #555;
+                        transition: 0.3s;
+                        border-radius: 16px;
+                    "></span>
+                    <span id="chatgpt-auto-collapse-slider-dot" style="
+                        position: absolute;
+                        content: '';
+                        height: 10px;
+                        width: 10px;
+                        left: 3px;
+                        bottom: 3px;
+                        background-color: white;
+                        transition: 0.3s;
+                        border-radius: 50%;
+                    "></span>
+                </label>
+            </div>
+            <div id="chatgpt-approval-container" style="display: flex; align-items: center; justify-content: space-between;">
+                <span>도구 요청 자동 승인
+                <span id="chatgpt-approval-tooltip" style="
+                    cursor: pointer;
+                    color: #fff;
+                    font-size: 12px;
+                    display: inline-block;
+                    width: 14px;
+                    height: 14px;
+                    line-height: 14px;
+                    text-align: center;
+                    border-radius: 50%;
+                    border: 1px solid #fff;
+                    margin-left: 3px;
+                ">?</span></span>
+                <label style="position: relative; display: inline-block; width: 28px; height: 16px; cursor: pointer;">
+                    <input type="checkbox" id="chatgpt-approval-toggle" style="opacity: 0; width: 0; height: 0;">
+                    <span id="chatgpt-approval-slider" style="
+                        position: absolute;
+                        cursor: pointer;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-color: #555;
+                        transition: 0.3s;
+                        border-radius: 16px;
+                    "></span>
+                    <span id="chatgpt-approval-slider-dot" style="
                         position: absolute;
                         content: '';
                         height: 10px;
@@ -4723,90 +4966,8 @@
                     "></span>
                 </label>
             </div>
-            <div id="chatgpt-approval-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>도구 요청 자동 승인
-                <span id="chatgpt-approval-tooltip" style="
-                    cursor: pointer;
-                    color: #fff;
-                    font-size: 12px;
-                    display: inline-block;
-                    width: 14px;
-                    height: 14px;
-                    line-height: 14px;
-                    text-align: center;
-                    border-radius: 50%;
-                    border: 1px solid #fff;
-                    margin-left: 3px;
-                ">?</span></span>
-                <label style="position: relative; display: inline-block; width: 28px; height: 16px; cursor: pointer;">
-                    <input type="checkbox" id="chatgpt-approval-toggle" style="opacity: 0; width: 0; height: 0;">
-                    <span id="chatgpt-approval-slider" style="
-                        position: absolute;
-                        cursor: pointer;
-                        top: 0;
-                        left: 0;
-                        right: 0;
-                        bottom: 0;
-                        background-color: #555;
-                        transition: 0.3s;
-                        border-radius: 16px;
-                    "></span>
-                    <span id="chatgpt-approval-slider-dot" style="
-                        position: absolute;
-                        content: '';
-                        height: 10px;
-                        width: 10px;
-                        left: 3px;
-                        bottom: 3px;
-                        background-color: white;
-                        transition: 0.3s;
-                        border-radius: 50%;
-                    "></span>
-                </label>
-            </div>
-            <div id="chatgpt-auto-collapse-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>분석 내용 자동 접기
-                <span id="chatgpt-auto-collapse-tooltip" style="
-                    cursor: pointer;
-                    color: #fff;
-                    font-size: 12px;
-                    display: inline-block;
-                    width: 14px;
-                    height: 14px;
-                    line-height: 14px;
-                    text-align: center;
-                    border-radius: 50%;
-                    border: 1px solid #fff;
-                    margin-left: 3px;
-                ">?</span></span>
-                <label style="position: relative; display: inline-block; width: 28px; height: 16px; cursor: pointer;">
-                    <input type="checkbox" id="chatgpt-auto-collapse-toggle" style="opacity: 0; width: 0; height: 0;">
-                    <span id="chatgpt-auto-collapse-slider" style="
-                        position: absolute;
-                        cursor: pointer;
-                        top: 0;
-                        left: 0;
-                        right: 0;
-                        bottom: 0;
-                        background-color: #555;
-                        transition: 0.3s;
-                        border-radius: 16px;
-                    "></span>
-                    <span id="chatgpt-auto-collapse-slider-dot" style="
-                        position: absolute;
-                        content: '';
-                        height: 10px;
-                        width: 10px;
-                        left: 3px;
-                        bottom: 3px;
-                        background-color: white;
-                        transition: 0.3s;
-                        border-radius: 50%;
-                    "></span>
-                </label>
-            </div>
             <div id="chatgpt-new-tab-container" style="display: flex; align-items: center; justify-content: space-between;">
-                <span>가운데 클릭으로 새 탭 열기
+                <span>가운데 클릭으로 링크 열기
                 <span id="chatgpt-new-tab-tooltip" style="
                     cursor: pointer;
                     color: #fff;
@@ -5217,7 +5378,7 @@
 
         const chatgptCopyDetailsTooltipBox = createTooltip(
             "chatgpt-copy-details-tooltip-box",
-            "전체 대화 복사에 추론 및 도구 호출 내용을 포함합니다.",
+            "복사 시 추론 내용과 도구 호출 내용을 포함합니다.",
         );
 
         const chatgptMessageInfoTooltipBox = createTooltip(
@@ -5241,12 +5402,12 @@
 
         const chatgptAutoCollapseTooltipBox = createTooltip(
             "chatgpt-auto-collapse-tooltip-box",
-            "분석 실행 내용을 기본적으로 접습니다.",
+            "분석 코드 블록을 접습니다.",
         );
 
         const chatgptNewTabTooltipBox = createTooltip(
             "chatgpt-new-tab-tooltip-box",
-            "사이드바와 분기 메뉴에서 가운데 클릭 또는 Ctrl+클릭으로 새 탭을 엽니다.",
+            "사이드바와 메뉴에서 가운데 클릭 또는 Ctrl+클릭으로 새 탭을 엽니다.",
         );
 
         const chatgptSelectionPopoverTooltipBox = createTooltip(
@@ -5588,9 +5749,6 @@
                 CHATGPT_AUTO_COLLAPSE_KEY,
                 (value) => {
                     chatgptAutoCollapseEnabled = value;
-                    pageWindow.dispatchEvent(
-                        new pageWindow.Event(CHATGPT_AUTO_COLLAPSE_EVENT),
-                    );
                     updateChatgptInjectionStatus();
                 },
             );
