@@ -4,7 +4,7 @@
 // @homepage     https://github.com/zetaloop/chatgpt-checker-next
 // @author       zetaloop
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.7.0
+// @version      5.7.1
 // @description  查看 ChatGPT 和 Codex 的账号、用量与服务信息。
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -1467,12 +1467,19 @@
                     return fn(props);
                 };
             },
-            actionRow(props) {
-                const enabled = useEarlyActions();
-                return native.createElement(native.actionRow, {
-                    ...props,
-                    alwaysShowActions: props.alwaysShowActions || enabled,
-                });
+            actionRow(fn) {
+                function ActionRow(props) {
+                    const enabled = useEarlyActions();
+                    return native.createElement(fn, {
+                        ...props,
+                        alwaysShowActions: props.alwaysShowActions || enabled,
+                    });
+                }
+                return (props) =>
+                    native.createElement(
+                        props.getMessageCopy ? ActionRow : fn,
+                        props,
+                    );
             },
             turnActions(fn, actions) {
                 const containsActions = (node) =>
@@ -3079,39 +3086,30 @@
             "chat",
         );
 
-        module(
-            "Markdown 序列化模块",
-            (source) =>
-                source.includes('type:"link",url:') &&
-                source.includes("resourceLink:!0"),
-            (markdown) => {
-                const link = exported(markdown, "Markdown 链接", (source) =>
-                    source.includes("resourceLink:!0"),
-                );
-                bindings.markdownLink = [markdown.id, link.exportName];
-                const [, serialize] = single(
-                    [
-                        ...link
-                            .toString()
-                            .matchAll(/\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/g),
-                    ],
-                    "Markdown 序列化接口",
-                );
-                const [name, exportName] = serialize.split(".");
-                const [, id] = single(
-                    [
-                        ...markdown.source.matchAll(
-                            new RegExp(
-                                `${RegExp.escape(name)}=[\\w$]+\\("([^"]+)"\\)`,
-                                "g",
-                            ),
+        const serializeLink = /\(0,([\w$]+\.[\w$]+)\)\(\{type:"link"/;
+        const markdownLink = (source) =>
+            source.includes("resourceLink:!0") && serializeLink.test(source);
+        module("Markdown 序列化模块", markdownLink, (markdown) => {
+            const link = exported(markdown, "Markdown 链接", markdownLink);
+            bindings.markdownLink = [markdown.id, link.exportName];
+            const [, serialize] = single(
+                [...link.toString().matchAll(new RegExp(serializeLink, "g"))],
+                "Markdown 序列化接口",
+            );
+            const [name, exportName] = serialize.split(".");
+            const [, id] = single(
+                [
+                    ...markdown.source.matchAll(
+                        new RegExp(
+                            `${RegExp.escape(name)}=[\\w$]+\\("([^"]+)"\\)`,
+                            "g",
                         ),
-                    ],
-                    "Markdown 序列化模块",
-                );
-                bindings.markdown = [id, exportName];
-            },
-        );
+                    ),
+                ],
+                "Markdown 序列化模块",
+            );
+            bindings.markdown = [id, exportName];
+        });
 
         for (const [name, brand] of [
             ["routeScope", "RouteScope"],
@@ -3427,12 +3425,14 @@
                             '.getAttribute("data-chatgpt-copy-reference")',
                         ),
                 );
-                const [, parse, extensions, mdastExtensions] = single(
+                const [, parse, options] = single(
                     [
                         ...messages.source.matchAll(
-                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,\{extensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\],mdastExtensions:\[\(0,([\w$]+\.[\w$]+)\)\(\)\]\}\)/g,
+                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,(\{[^;]*?\})\)\.children\b/g,
                         ),
-                    ],
+                    ].filter(([, , options]) =>
+                        options.includes("mdastExtensions:"),
+                    ),
                     "原生 Markdown 解析器",
                 );
                 const [, resolve] = single(
@@ -3445,7 +3445,7 @@
                 );
                 append(
                     messages,
-                    `${api}.register({messageText:${copyText},parseMarkdown:content=>${parse}(content,{extensions:[${extensions}()],mdastExtensions:[${mdastExtensions}()]}),resolveReference:${resolve}});`,
+                    `${api}.register({messageText:${copyText},parseMarkdown:content=>(0,${parse})(content,${options}),resolveReference:${resolve}});`,
                 );
             },
             "chat",
@@ -3507,24 +3507,6 @@
                     [...actions.source.matchAll(/\bisImage:([^,}]+)/g)],
                     "图片操作状态",
                 );
-                const [rowCall, actionRow] = single(
-                    [
-                        ...actions.source.matchAll(
-                            /\(0,[\w$]+\.(?:jsx|jsxs)\)\(([\w$.]+),\{actionRowRef:/g,
-                        ),
-                    ],
-                    "操作栏组件",
-                );
-                replace(
-                    actions,
-                    rowCall,
-                    rowCall
-                        .replace(`(${actionRow},`, () => `(${api}.actionRow,`)
-                        .replace(
-                            "{actionRowRef:",
-                            "{getMessageCopy:checkerCopy,actionRowRef:",
-                        ),
-                );
                 const [assignment] = single(
                     [
                         ...actions.source.matchAll(
@@ -3545,7 +3527,7 @@
                 replace(
                     actions,
                     "copyText:",
-                    "copyText:checkerCopyText?checkerCopyText:",
+                    "getMessageCopy:checkerCopy,copyText:checkerCopyText?checkerCopyText:",
                 );
                 replace(messages, actionsSource, actions.source);
                 const renderTurn = declared(messages, "会话轮次", (source) =>
@@ -3602,7 +3584,7 @@
                 );
                 append(
                     messages,
-                    `${api}.register({actionRow:${actionRow}});${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
+                    `${renderMessage}=${api}.message(${renderMessage});${renderActions}=${api}.messageActions(${api}.message(${renderActions},true));${renderTurn}=${api}.turnActions(${renderTurn},${renderActions});`,
                 );
                 const menu = declared(messages, "消息菜单", (source) =>
                     source.includes(
@@ -3623,88 +3605,86 @@
             contentModule,
         );
 
-        module(
+        const copyButton = (label, role, writeCall, getFields) => {
+            const surface = `surface:"${role}_message"`;
+            const matches = (source) =>
+                source.includes(surface) && writeCall.test(source);
+            module(
+                label,
+                matches,
+                (button) => {
+                    const fn = declared(button, label, matches);
+                    const source = declarations(button)[fn].toString();
+                    const write = single(
+                        [...source.matchAll(new RegExp(writeCall, "g"))],
+                        "写入消息内容",
+                    );
+                    const start = source.lastIndexOf(surface, write.index);
+                    if (start < 0) throw new Error("复制操作未匹配");
+                    let click = source.slice(start, write.index);
+                    for (const [name, value] of getFields(write)) {
+                        const [assignment] = single(
+                            [
+                                ...click.matchAll(
+                                    new RegExp(
+                                        `(?:;(?:let|const|var) |,)${RegExp.escape(name)}=(?!=)`,
+                                        "g",
+                                    ),
+                                ),
+                            ],
+                            label,
+                        );
+                        click = click.replace(
+                            assignment,
+                            () => `${assignment}checkerText!=null?${value}:`,
+                        );
+                    }
+                    click = click.replace(
+                        ";",
+                        ";const checkerText=checkerCopy.current?.();",
+                    );
+                    const [, props] = source.match(
+                        /^function [\w$]+\(([\w$]+)\)/,
+                    );
+                    replace(
+                        button,
+                        source,
+                        source
+                            .slice(0, start)
+                            .replace(
+                                "{",
+                                () =>
+                                    `{const checkerCopy=${api}.useMessageCopy(${props});`,
+                            ) +
+                            click +
+                            source.slice(write.index),
+                    );
+                    if (role === "assistant")
+                        append(
+                            button,
+                            `${api}.register({actionRow:${fn}});${fn}=${api}.actionRow(${fn});`,
+                        );
+                },
+                "chat",
+            );
+        };
+        copyButton(
             "用户消息复制按钮",
-            (source) =>
-                source.includes('surface:"user_message"') &&
-                source.includes("preserveWhitespaceInHtml:"),
-            (button) => {
-                const fn = declared(
-                    button,
-                    "用户消息复制",
-                    (source) =>
-                        source.includes('surface:"user_message"') &&
-                        source.includes("preserveWhitespaceInHtml:"),
-                );
-                const source = declarations(button)[fn].toString();
-                const [start] = single(
-                    [
-                        ...source.matchAll(
-                            /let [\w$]+=function\([\w$]+\)\{let\{contentRef:/g,
-                        ),
-                    ],
-                    "复制用户消息内容",
-                );
-                const [, props] = source.match(/^function [\w$]+\(([\w$]+)\)/);
-                replace(
-                    button,
-                    source,
-                    source
-                        .replace(
-                            "{",
-                            () =>
-                                `{const checkerCopy=${api}.useMessageCopy(${props});`,
-                        )
-                        .replace(start, () =>
-                            start.replace(
-                                "=function",
-                                "=checkerCopy.current?.()??function",
-                            ),
-                        ),
-                );
-            },
-            "chat",
+            "user",
+            /;\(0,[\w$]+\.[\w$]+\)\(([\w$]+),[\w$]+\)\.then\(/,
+            ([, payload]) => [[payload, "checkerText"]],
         );
-        module(
+        copyButton(
             "助手消息复制按钮",
-            (source) =>
-                source.includes('surface:"assistant_message"') &&
-                source.includes("getCopyHtml:"),
-            (button) => {
-                const fn = declared(
-                    button,
-                    "助手消息复制",
-                    (source) =>
-                        source.includes('surface:"assistant_message"') &&
-                        source.includes("getCopyHtml:"),
-                );
-                const source = declarations(button)[fn].toString();
-                const [read, html, getHtml, text] = single(
-                    [
-                        ...source.matchAll(
-                            /let ([\w$]+)=([\w$]+)\?\.\(\),([\w$]+)=/g,
-                        ),
+            "assistant",
+            /\(0,[\w$]+\.[\w$]+\)\([^,;{}]*\{((?:"text\/(?:plain|html)":[\w$]+,?){2})\},[\w$]+\)\.then\(/,
+            ([, formats]) =>
+                [...formats.matchAll(/"text\/(plain|html)":([\w$]+)/g)].map(
+                    ([, format, name]) => [
+                        name,
+                        format === "plain" ? "checkerText" : "null",
                     ],
-                    "复制助手消息内容",
-                );
-                const [, props] = source.match(/^function [\w$]+\(([\w$]+)\)/);
-                replace(
-                    button,
-                    source,
-                    source
-                        .replace(
-                            "{",
-                            () =>
-                                `{const checkerCopy=${api}.useMessageCopy(${props});`,
-                        )
-                        .replace(
-                            read,
-                            () =>
-                                `let checkerText=checkerCopy.current?.(),${html}=checkerText==null?${getHtml}?.():null,${text}=checkerText??`,
-                        ),
-                );
-            },
-            "chat",
+                ),
         );
         module(
             "消息时间格式模块",
