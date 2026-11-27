@@ -3623,47 +3623,65 @@
             contentModule,
         );
 
-        module(
+        const copyButton = (label, role, writeCall, transform) => {
+            const surface = `surface:"${role}_message"`;
+            const matches = (source) =>
+                source.includes(surface) && writeCall.test(source);
+            module(
+                label,
+                matches,
+                (button) => {
+                    const fn = declared(button, label, matches);
+                    const source = declarations(button)[fn].toString();
+                    const write = single(
+                        [...source.matchAll(new RegExp(writeCall, "g"))],
+                        "写入消息内容",
+                    );
+                    const start = source.lastIndexOf(surface, write.index);
+                    if (start < 0) throw new Error("复制操作未匹配");
+                    const click = source.slice(start, write.index);
+                    const [, props] = source.match(
+                        /^function [\w$]+\(([\w$]+)\)/,
+                    );
+                    replace(
+                        button,
+                        source,
+                        source
+                            .slice(0, start)
+                            .replace(
+                                "{",
+                                () =>
+                                    `{const checkerCopy=${api}.useMessageCopy(${props});`,
+                            ) +
+                            transform(click, write) +
+                            source.slice(write.index),
+                    );
+                },
+                "chat",
+            );
+        };
+        copyButton(
             "用户消息复制按钮",
-            (source) =>
-                source.includes('surface:"user_message"') &&
-                source.includes("preserveWhitespaceInHtml:"),
-            (button) => {
-                const fn = declared(
-                    button,
-                    "用户消息复制",
-                    (source) =>
-                        source.includes('surface:"user_message"') &&
-                        source.includes("preserveWhitespaceInHtml:"),
-                );
-                const source = declarations(button)[fn].toString();
-                const [start] = single(
+            "user",
+            /;\(0,[\w$]+\.[\w$]+\)\(([\w$]+),[\w$]+\)\.then\(/,
+            (click, [, payload]) => {
+                const [assignment] = single(
                     [
-                        ...source.matchAll(
-                            /let [\w$]+=function\([\w$]+\)\{let\{contentRef:/g,
+                        ...click.matchAll(
+                            new RegExp(
+                                `;(?:let|const|var) ${RegExp.escape(payload)}=`,
+                                "g",
+                            ),
                         ),
                     ],
                     "复制用户消息内容",
                 );
-                const [, props] = source.match(/^function [\w$]+\(([\w$]+)\)/);
-                replace(
-                    button,
-                    source,
-                    source
-                        .replace(
-                            "{",
-                            () =>
-                                `{const checkerCopy=${api}.useMessageCopy(${props});`,
-                        )
-                        .replace(start, () =>
-                            start.replace(
-                                "=function",
-                                "=checkerCopy.current?.()??function",
-                            ),
-                        ),
+                return click.replace(
+                    assignment,
+                    () =>
+                        `;const checkerText=checkerCopy.current?.()${assignment}checkerText!=null?checkerText:`,
                 );
             },
-            "chat",
         );
         module(
             "助手消息复制按钮",
