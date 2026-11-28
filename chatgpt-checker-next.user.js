@@ -6452,26 +6452,32 @@
             requestUrl.includes("/backend-api/conversation/init") &&
             finalMethod === "POST"
         ) {
+            const { signal = resource?.signal } = options ?? {};
+            let data;
             try {
-                const data = await response.clone().json();
-                if (Array.isArray(data.limits_progress)) {
-                    for (const limit of data.limits_progress) {
-                        const config =
-                            CHATGPT_FEATURE_LIMITS[limit.feature_name];
-                        if (Array.isArray(config)) {
-                            updateChatgptFeatureLimit(
-                                config,
-                                limit.remaining,
-                                limit.reset_after,
-                            );
-                        }
-                    }
-                }
-                return;
+                data = await response.clone().json();
             } catch (e) {
-                console.error("[CheckerNext] 处理功能用量响应出错:", e);
+                if (
+                    signal?.aborted &&
+                    (e === signal.reason || e?.name === "AbortError")
+                )
+                    return;
+                console.error("[CheckerNext] 读取功能用量响应出错:", e);
                 return;
             }
+            if (Array.isArray(data.limits_progress)) {
+                for (const limit of data.limits_progress) {
+                    const config = CHATGPT_FEATURE_LIMITS[limit.feature_name];
+                    if (Array.isArray(config)) {
+                        updateChatgptFeatureLimit(
+                            config,
+                            limit.remaining,
+                            limit.reset_after,
+                        );
+                    }
+                }
+            }
+            return;
         }
 
         if (
