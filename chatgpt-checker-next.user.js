@@ -4,7 +4,7 @@
 // @homepage     https://github.com/zetaloop/chatgpt-checker-next
 // @author       zetaloop
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+PHBhdGggZmlsbD0iIzJjM2U1MCIgZD0iTTMyIDJDMTUuNDMyIDIgMiAxNS40MzIgMiAzMnMxMy40MzIgMzAgMzAgMzAgMzAtMTMuNDMyIDMwLTMwUzQ4LjU2OCAyIDMyIDJ6bTAgNTRjLTEzLjIzMyAwLTI0LTEwLjc2Ny0yNC0yNFMxOC43NjcgOCAzMiA4czI0IDEwLjc2NyAyNCAyNFM0NS4yMzMgNTYgMzIgNTZ6Ii8+PHBhdGggZmlsbD0iIzNkYzJmZiIgZD0iTTMyIDEyYy0xMS4wNDYgMC0yMCA4Ljk1NC0yMCAyMHM4Ljk1NCAyMCAyMCAyMCAyMC04Ljk1NCAyMC0yMFM0My4wNDYgMTIgMzIgMTJ6bTAgMzZjLTguODM3IDAtMTYtNy4xNjMtMTYtMTZzNy4xNjMtMTYgMTYtMTYgMTYgNy4xNjMgMTYgMTZTNDAuODM3IDQ4IDMyIDQ4eiIvPjxwYXRoIGZpbGw9IiMwMGZmN2YiIGQ9Ik0zMiAyMGMtNi42MjcgMC0xMiA1LjM3My0xMiAxMnM1LjM3MyAxMiAxMiAxMiAxMi01LjM3MyAxMi0xMlMzOC42MjcgMjAgMzIgMjB6bTAgMjBjLTQuNDE4IDAtOC0zLjU4Mi04LThzMy41ODItOCA4LTggOCAzLjU4MiA4IDgtMy41ODIgOC04IDh6Ii8+PGNpcmNsZSBmaWxsPSIjZmZmIiBjeD0iMzIiIGN5PSIzMiIgcj0iNCIvPjwvc3ZnPg==
-// @version      5.7.1
+// @version      5.7.2
 // @description  查看 ChatGPT 和 Codex 的账号、用量与服务信息。
 // @match        *://chatgpt.com/*
 // @grant        GM_addElement
@@ -248,8 +248,11 @@
                 const target = { id, source };
                 try {
                     for (const entry of matched) {
-                        if (entry.after && !entry.after.ready)
-                            throw new Error(`${entry.after.label}尚未挂接`);
+                        const missing = entry.after?.find(
+                            (dependency) => !dependency.ready,
+                        );
+                        if (missing)
+                            throw new Error(`${missing.label}尚未挂接`);
                         if (entry.id !== undefined && entry.id !== id)
                             throw new Error(`${entry.label}匹配到多个模块`);
                         entry.apply?.(target);
@@ -294,17 +297,22 @@
                 const matched = entries.filter((entry) =>
                     entry.predicate(source),
                 );
-                const dependency = matched.find(
-                    (entry) => entry.after && !entry.after.ready,
-                )?.after;
-                if (!dependency) return apply(id, factory, source, matched);
-                dependency.consumers ??= new Set();
+                const waiting = matched
+                    .flatMap((entry) => entry.after ?? [])
+                    .filter((entry) => !entry.ready);
+                if (!waiting.length) return apply(id, factory, source, matched);
                 let result;
                 const finish = () => {
-                    dependency.consumers.delete(finish);
+                    for (const entry of waiting) entry.consumers.delete(resume);
                     result = apply(id, factory, source, matched);
                 };
-                dependency.consumers.add(finish);
+                const resume = () => {
+                    if (waiting.every((entry) => entry.ready)) finish();
+                };
+                for (const entry of waiting) {
+                    entry.consumers ??= new Set();
+                    entry.consumers.add(resume);
+                }
                 function deferred(...args) {
                     if (!result) finish();
                     return Reflect.apply(result, this, args);
@@ -2351,7 +2359,7 @@
     function createChatgptModulePatches() {
         const patches = [];
         const bindings = {};
-        const module = (label, predicate, apply, page, after) => {
+        const module = (label, predicate, apply, page, ...after) => {
             const entry = { label, predicate, apply, page, after };
             patches.push(entry);
             return entry;
@@ -3410,14 +3418,14 @@
             "chat",
         );
 
-        module(
+        const copyModule = module(
             "消息复制模块",
             (source) =>
                 source.includes(
                     '.getAttribute("data-chatgpt-copy-reference")',
                 ) && source.includes("mdastExtensions:"),
             (messages) => {
-                const copyText = declared(
+                const copyText = exported(
                     messages,
                     "原生消息复制接口",
                     (source) =>
@@ -3425,9 +3433,17 @@
                             '.getAttribute("data-chatgpt-copy-reference")',
                         ),
                 );
+                const walk = declared(
+                    messages,
+                    "原生消息引用遍历",
+                    (source) =>
+                        source.includes("mdastExtensions:") &&
+                        source.includes(".contentReferences"),
+                );
+                const scanner = declarations(messages)[walk].toString();
                 const [, parse, options] = single(
                     [
-                        ...messages.source.matchAll(
+                        ...scanner.matchAll(
                             /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,(\{[^;]*?\})\)\.children\b/g,
                         ),
                     ].filter(([, , options]) =>
@@ -3435,17 +3451,24 @@
                     ),
                     "原生 Markdown 解析器",
                 );
-                const [, resolve] = single(
+                const [, , resolve] = single(
                     [
-                        ...messages.source.matchAll(
-                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+,[\w$]+\.contentReferences\)/g,
+                        ...scanner.matchAll(
+                            /([\w$]+)=\(0,([\w$]+\.[\w$]+)\)\(/g,
                         ),
-                    ],
+                    ].filter(([, result]) =>
+                        ["index", "reference"].every((field) =>
+                            new RegExp(
+                                `(?<![\\w$])${RegExp.escape(result)}\\.${field}\\b`,
+                            ).test(scanner),
+                        ),
+                    ),
                     "原生引用解析接口",
                 );
+                bindings.messageText = [messages.id, copyText.exportName];
                 append(
                     messages,
-                    `${api}.register({messageText:${copyText},parseMarkdown:content=>(0,${parse})(content,${options}),resolveReference:${resolve}});`,
+                    `${api}.register({parseMarkdown:content=>(0,${parse})(content,${options}),resolveReference:${resolve}});`,
                 );
             },
             "chat",
@@ -3603,6 +3626,7 @@
             },
             "chat",
             contentModule,
+            copyModule,
         );
 
         const copyButton = (label, role, writeCall, getFields) => {
@@ -6428,26 +6452,32 @@
             requestUrl.includes("/backend-api/conversation/init") &&
             finalMethod === "POST"
         ) {
+            const { signal = resource?.signal } = options ?? {};
+            let data;
             try {
-                const data = await response.clone().json();
-                if (Array.isArray(data.limits_progress)) {
-                    for (const limit of data.limits_progress) {
-                        const config =
-                            CHATGPT_FEATURE_LIMITS[limit.feature_name];
-                        if (Array.isArray(config)) {
-                            updateChatgptFeatureLimit(
-                                config,
-                                limit.remaining,
-                                limit.reset_after,
-                            );
-                        }
-                    }
-                }
-                return;
+                data = await response.clone().json();
             } catch (e) {
-                console.error("[CheckerNext] 处理功能用量响应出错:", e);
+                if (
+                    signal?.aborted &&
+                    (e === signal.reason || e?.name === "AbortError")
+                )
+                    return;
+                console.error("[CheckerNext] 读取功能用量响应出错:", e);
                 return;
             }
+            if (Array.isArray(data.limits_progress)) {
+                for (const limit of data.limits_progress) {
+                    const config = CHATGPT_FEATURE_LIMITS[limit.feature_name];
+                    if (Array.isArray(config)) {
+                        updateChatgptFeatureLimit(
+                            config,
+                            limit.remaining,
+                            limit.reset_after,
+                        );
+                    }
+                }
+            }
+            return;
         }
 
         if (
