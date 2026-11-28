@@ -248,8 +248,11 @@
                 const target = { id, source };
                 try {
                     for (const entry of matched) {
-                        if (entry.after && !entry.after.ready)
-                            throw new Error(`${entry.after.label}尚未挂接`);
+                        const missing = entry.after?.find(
+                            (dependency) => !dependency.ready,
+                        );
+                        if (missing)
+                            throw new Error(`${missing.label}尚未挂接`);
                         if (entry.id !== undefined && entry.id !== id)
                             throw new Error(`${entry.label}匹配到多个模块`);
                         entry.apply?.(target);
@@ -294,17 +297,22 @@
                 const matched = entries.filter((entry) =>
                     entry.predicate(source),
                 );
-                const dependency = matched.find(
-                    (entry) => entry.after && !entry.after.ready,
-                )?.after;
-                if (!dependency) return apply(id, factory, source, matched);
-                dependency.consumers ??= new Set();
+                const waiting = matched
+                    .flatMap((entry) => entry.after ?? [])
+                    .filter((entry) => !entry.ready);
+                if (!waiting.length) return apply(id, factory, source, matched);
                 let result;
                 const finish = () => {
-                    dependency.consumers.delete(finish);
+                    for (const entry of waiting) entry.consumers.delete(resume);
                     result = apply(id, factory, source, matched);
                 };
-                dependency.consumers.add(finish);
+                const resume = () => {
+                    if (waiting.every((entry) => entry.ready)) finish();
+                };
+                for (const entry of waiting) {
+                    entry.consumers ??= new Set();
+                    entry.consumers.add(resume);
+                }
                 function deferred(...args) {
                     if (!result) finish();
                     return Reflect.apply(result, this, args);
@@ -2351,7 +2359,7 @@
     function createChatgptModulePatches() {
         const patches = [];
         const bindings = {};
-        const module = (label, predicate, apply, page, after) => {
+        const module = (label, predicate, apply, page, ...after) => {
             const entry = { label, predicate, apply, page, after };
             patches.push(entry);
             return entry;
@@ -3410,14 +3418,14 @@
             "chat",
         );
 
-        module(
+        const copyModule = module(
             "消息复制模块",
             (source) =>
                 source.includes(
                     '.getAttribute("data-chatgpt-copy-reference")',
                 ) && source.includes("mdastExtensions:"),
             (messages) => {
-                const copyText = declared(
+                const copyText = exported(
                     messages,
                     "原生消息复制接口",
                     (source) =>
@@ -3425,9 +3433,17 @@
                             '.getAttribute("data-chatgpt-copy-reference")',
                         ),
                 );
+                const walk = declared(
+                    messages,
+                    "原生消息引用遍历",
+                    (source) =>
+                        source.includes("mdastExtensions:") &&
+                        source.includes(".contentReferences"),
+                );
+                const scanner = declarations(messages)[walk].toString();
                 const [, parse, options] = single(
                     [
-                        ...messages.source.matchAll(
+                        ...scanner.matchAll(
                             /\(0,([\w$]+\.[\w$]+)\)\([\w$]+\.content,(\{[^;]*?\})\)\.children\b/g,
                         ),
                     ].filter(([, , options]) =>
@@ -3435,17 +3451,24 @@
                     ),
                     "原生 Markdown 解析器",
                 );
-                const [, resolve] = single(
+                const [, , resolve] = single(
                     [
-                        ...messages.source.matchAll(
-                            /\(0,([\w$]+\.[\w$]+)\)\([\w$]+,[\w$]+\.contentReferences\)/g,
+                        ...scanner.matchAll(
+                            /([\w$]+)=\(0,([\w$]+\.[\w$]+)\)\(/g,
                         ),
-                    ],
+                    ].filter(([, result]) =>
+                        ["index", "reference"].every((field) =>
+                            new RegExp(
+                                `(?<![\\w$])${RegExp.escape(result)}\\.${field}\\b`,
+                            ).test(scanner),
+                        ),
+                    ),
                     "原生引用解析接口",
                 );
+                bindings.messageText = [messages.id, copyText.exportName];
                 append(
                     messages,
-                    `${api}.register({messageText:${copyText},parseMarkdown:content=>(0,${parse})(content,${options}),resolveReference:${resolve}});`,
+                    `${api}.register({parseMarkdown:content=>(0,${parse})(content,${options}),resolveReference:${resolve}});`,
                 );
             },
             "chat",
@@ -3603,6 +3626,7 @@
             },
             "chat",
             contentModule,
+            copyModule,
         );
 
         const copyButton = (label, role, writeCall, getFields) => {
